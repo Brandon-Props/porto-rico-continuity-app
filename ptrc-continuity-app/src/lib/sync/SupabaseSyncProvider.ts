@@ -172,7 +172,26 @@ export class SupabaseSyncProvider implements SyncProvider {
       }
       return { success: true };
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) };
+      return { success: false, error: describeError(err) };
     }
   }
+}
+
+/** Supabase's own errors (PostgrestError, AuthError) aren't always real Error
+ *  instances, so `String(err)` was collapsing them to the useless "[object
+ *  Object]" seen in the Sync screen. Pull the actual message (and any
+ *  Postgres hint/code) out no matter what shape the thrown value is. */
+function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === "object") {
+    const obj = err as Record<string, unknown>;
+    const parts = [obj.message, obj.hint, obj.code].filter((v) => typeof v === "string" && v.length > 0);
+    if (parts.length > 0) return parts.join(" — ");
+    try {
+      return JSON.stringify(obj);
+    } catch {
+      /* fall through */
+    }
+  }
+  return String(err);
 }
