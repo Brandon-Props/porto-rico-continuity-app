@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useLiveQuery } from "dexie-react-hooks";
 import { TopBar } from "@/components/TopBar";
@@ -10,6 +10,8 @@ import { getActiveProductionId } from "@/db/repositories/productions";
 import { listCategories, addCustomCategory } from "@/db/repositories/categories";
 import { DEFAULT_PHOTO_CATEGORIES } from "@/types";
 import { getSupabaseOverride, setSupabaseOverride, clearSupabaseOverride, getActiveSyncProvider } from "@/lib/sync";
+import { fetchInviteCode } from "@/lib/sync/SupabaseSyncProvider";
+import { reconcileCloudIdentity } from "@/lib/sync/identity";
 
 export default function SettingsPage() {
   const { mode, setMode } = useTheme();
@@ -22,6 +24,21 @@ export default function SettingsPage() {
   const [supabaseUrl, setSupabaseUrl] = useState(existingOverride?.url ?? "");
   const [supabaseKey, setSupabaseKey] = useState(existingOverride?.anonKey ?? "");
   const provider = getActiveSyncProvider();
+
+  const [inviteCode, setInviteCode] = useState<string | null | "loading">(null);
+
+  useEffect(() => {
+    if (!provider.isConfigured() || !productionId) return;
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? existingOverride?.url;
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? existingOverride?.anonKey;
+    if (!url || !anonKey) return;
+    setInviteCode("loading");
+    reconcileCloudIdentity(url, anonKey, productionId)
+      .then(() => fetchInviteCode(url, anonKey, productionId))
+      .then((code) => setInviteCode(code))
+      .catch(() => setInviteCode(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productionId, provider.isConfigured()]);
 
   return (
     <div className="flex flex-col gap-6 pb-8">
@@ -119,6 +136,36 @@ export default function SettingsPage() {
               Save & Connect
             </Button>
           </div>
+
+          {provider.isConfigured() && (
+            <div className="mt-2 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                Invite Code — share this with your crew
+              </div>
+              {inviteCode === "loading" && <div className="mt-1 text-sm text-[var(--text-muted)]">Fetching…</div>}
+              {inviteCode === null && (
+                <div className="mt-1 text-sm text-[var(--text-muted)]">
+                  Not available yet — needs at least one successful sync. Check the Sync screen, or make sure
+                  &quot;Allow anonymous sign-ins&quot; is on in your Supabase project&apos;s Auth settings.
+                </div>
+              )}
+              {inviteCode && inviteCode !== "loading" && (
+                <div className="mt-1 flex items-center justify-between">
+                  <span className="text-2xl font-black tracking-[0.3em] text-[var(--text)]">{inviteCode}</span>
+                  <button
+                    className="text-xs font-semibold text-[var(--accent)]"
+                    onClick={() => navigator.clipboard?.writeText(inviteCode)}
+                  >
+                    Copy
+                  </button>
+                </div>
+              )}
+              <p className="mt-2 text-xs text-[var(--text-muted)]">
+                Crew members open the app, tap Login → Join with Invite Code, and enter this. They&apos;ll need
+                internet once to pull the schedule down; everything after that works offline like normal.
+              </p>
+            </div>
+          )}
         </div>
       </section>
 

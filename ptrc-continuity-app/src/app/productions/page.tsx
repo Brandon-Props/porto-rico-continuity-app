@@ -61,9 +61,14 @@ export default function ProductionsPage() {
       </div>
 
       {!creating ? (
-        <Button variant="secondary" fullWidth onClick={() => setCreating(true)}>
-          + New Production
-        </Button>
+        <div className="flex flex-col gap-2">
+          <Button variant="secondary" fullWidth onClick={() => setCreating(true)}>
+            + New Production
+          </Button>
+          <Button variant="ghost" fullWidth onClick={() => router.push("/join")}>
+            Join with Invite Code
+          </Button>
+        </div>
       ) : (
         <div className="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
           <input

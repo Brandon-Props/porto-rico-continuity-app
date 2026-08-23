@@ -116,6 +116,8 @@ export interface Production extends Omit<SyncableFields, "productionId"> {
   shortCode: string;
   status: "active" | "wrapped" | "archived";
   settingsJson?: Record<string, unknown>;
+  /** Server-generated (supabase/migrations/0002_invites_and_auth.sql) — crew join with this. */
+  inviteCode?: string | null;
 }
 
 export interface ProductionMember extends SyncableFields {

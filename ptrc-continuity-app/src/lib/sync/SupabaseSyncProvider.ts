@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { SyncOperation } from "@/types";
 import type { SyncProvider } from "./SyncProvider";
+import { toSnakeCase, toCamelCase } from "./caseTransform";
 
 // Table names line up 1:1 with supabase/migrations/0001_init.sql.
 const ENTITY_TO_TABLE: Record<string, string> = {
@@ -18,6 +19,122 @@ const ENTITY_TO_TABLE: Record<string, string> = {
   characters: "characters",
 };
 
+// One client per (url, key) pair for the life of the tab — supabase-js persists
+// the auth session (including the anonymous one, see ensureAnonymousSession) to
+// localStorage itself, so a fresh instance still picks up an existing session.
+let cachedClient: SupabaseClient | null = null;
+let cachedFingerprint: string | null = null;
+
+function getClient(url: string, anonKey: string): SupabaseClient {
+  const fingerprint = `${url}|${anonKey}`;
+  if (!cachedClient || cachedFingerprint !== fingerprint) {
+    cachedClient = createClient(url, anonKey);
+    cachedFingerprint = fingerprint;
+  }
+  return cachedClient;
+}
+
+/**
+ * There is no email/password login in this app (see src/lib/currentUser.ts —
+ * "who's using this device" is just a local name). But Postgres row security
+ * (supabase/migrations) is keyed off `auth.uid()`, so every device still needs
+ * *some* real, stable Supabase Auth identity for `is_member_of()` to check
+ * against. An anonymous session is that identity: invisible to the crew member,
+ * but a real auth.uid() from Supabase's perspective.
+ *
+ * Requires "Allow anonymous sign-ins" turned on in the Supabase project's
+ * Authentication settings — off by default on a new project.
+ */
+export async function ensureAnonymousSession(url: string, anonKey: string): Promise<string> {
+  const client = getClient(url, anonKey);
+  const { data: sessionData } = await client.auth.getSession();
+  if (sessionData.session?.user?.id) return sessionData.session.user.id;
+
+  const { data, error } = await client.auth.signInAnonymously();
+  if (error || !data.user) {
+    throw new Error(
+      error?.message ??
+        "Could not start a Supabase session. In your Supabase project, go to Authentication → Sign In / Providers and turn on \"Allow anonymous sign-ins\"."
+    );
+  }
+  return data.user.id;
+}
+
+export interface JoinedProduction {
+  productionId: string;
+  productionName: string;
+  memberId: string;
+  role: string;
+}
+
+/** Calls the join_production_by_code(...) function from
+ *  supabase/migrations/0002_invites_and_auth.sql — it validates the code and
+ *  creates the crew member's membership row server-side (bypassing RLS via
+ *  SECURITY DEFINER), so is_member_of() passes immediately, before this device
+ *  has pushed or pulled anything. */
+export async function joinProductionByCode(
+  url: string,
+  anonKey: string,
+  code: string,
+  displayName: string
+): Promise<JoinedProduction> {
+  await ensureAnonymousSession(url, anonKey);
+  const client = getClient(url, anonKey);
+  const { data, error } = await client.rpc("join_production_by_code", {
+    p_code: code.trim(),
+    p_display_name: displayName,
+  });
+  if (error) throw new Error(error.message);
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) throw new Error("That invite code didn't match a production.");
+  return {
+    productionId: row.production_id as string,
+    productionName: row.production_name as string,
+    memberId: row.member_id as string,
+    role: row.role as string,
+  };
+}
+
+/** Fetches every row belonging to a production from every synced table, keyed
+ *  by the same entity names used elsewhere (enqueueSync, ENTITY_TO_TABLE) so the
+ *  caller (see src/lib/sync/hydrate.ts) can merge each list into its Dexie
+ *  table. This is the half of sync that never existed before — without it, a
+ *  device joining an existing production only ever sees what IT creates. */
+export async function pullProductionData(
+  url: string,
+  anonKey: string,
+  productionId: string
+): Promise<Record<string, Record<string, unknown>[]>> {
+  await ensureAnonymousSession(url, anonKey);
+  const client = getClient(url, anonKey);
+  const results: Record<string, Record<string, unknown>[]> = {};
+
+  for (const [entity, table] of Object.entries(ENTITY_TO_TABLE)) {
+    const filterColumn = table === "productions" ? "id" : "production_id";
+    const { data, error } = await client
+      .from(table)
+      .select("*")
+      .eq(filterColumn, productionId)
+      .is("deleted_at", null);
+    results[entity] = error ? [] : (data ?? []).map((row) => toCamelCase(row as Record<string, unknown>));
+  }
+  return results;
+}
+
+/** Fetches just the invite code for a production this device already knows
+ *  about (used by the Settings screen so an admin can hand it to crew). */
+export async function fetchInviteCode(
+  url: string,
+  anonKey: string,
+  productionId: string
+): Promise<string | null> {
+  await ensureAnonymousSession(url, anonKey);
+  const client = getClient(url, anonKey);
+  const { data, error } = await client.from("productions").select("invite_code").eq("id", productionId).maybeSingle();
+  if (error || !data) return null;
+  return (data as { invite_code: string | null }).invite_code;
+}
+
 /**
  * Fill in once you have a Supabase project: set NEXT_PUBLIC_SUPABASE_URL and
  * NEXT_PUBLIC_SUPABASE_ANON_KEY, then flip the provider in lib/sync/index.ts.
@@ -27,7 +144,6 @@ const ENTITY_TO_TABLE: Record<string, string> = {
  */
 export class SupabaseSyncProvider implements SyncProvider {
   readonly name = "supabase";
-  private client: SupabaseClient | null = null;
 
   constructor(private url?: string, private anonKey?: string) {}
 
@@ -35,27 +151,23 @@ export class SupabaseSyncProvider implements SyncProvider {
     return Boolean(this.url && this.anonKey);
   }
 
-  private getClient(): SupabaseClient {
-    if (!this.client) {
-      if (!this.url || !this.anonKey) throw new Error("Supabase not configured");
-      this.client = createClient(this.url, this.anonKey);
-    }
-    return this.client;
-  }
-
   async push(op: SyncOperation): Promise<{ success: boolean; error?: string }> {
-    if (!this.isConfigured()) return { success: false, error: "Supabase not configured" };
+    if (!this.url || !this.anonKey) return { success: false, error: "Supabase not configured" };
     const table = ENTITY_TO_TABLE[op.entityTable];
     if (!table) return { success: false, error: `No table mapping for ${op.entityTable}` };
 
     try {
-      const supabase = this.getClient();
+      await ensureAnonymousSession(this.url, this.anonKey);
+      const supabase = getClient(this.url, this.anonKey);
       if (op.op === "delete") {
         const { error } = await supabase.from(table).update({ deleted_at: new Date().toISOString() }).eq("id", op.entityId);
         if (error) throw error;
       } else {
-        // Idempotent upsert keyed by the client-generated UUID — retries never duplicate (spec §59).
-        const { error } = await supabase.from(table).upsert(op.payload as Record<string, unknown>, { onConflict: "id" });
+        // Idempotent upsert keyed by the client-generated UUID — retries never
+        // duplicate data (spec §59). Dexie's camelCase record has to become the
+        // snake_case row Postgres actually has columns for first.
+        const payload = toSnakeCase(op.payload as Record<string, unknown>);
+        const { error } = await supabase.from(table).upsert(payload, { onConflict: "id" });
         if (error) throw error;
       }
       return { success: true };
