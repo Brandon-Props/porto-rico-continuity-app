@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+/* Tailwind v4: dark mode is applied by toggling `.dark` on <html> (see AppProviders). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --border: #d8dce3;
+  --text: #14181f;
+  --text-muted: #5b6472;
+  --accent: #b3720a;
+  --accent-contrast: #ffffff;
+  --danger: #b3261e;
+  --success: #1a7a4c;
+  --warning: #a15c00;
+}
+
+.dark {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-raised: #1c232d;
+  --border: #2a323d;
+  --text: #f2f4f7;
+  --text-muted: #9aa4b2;
+  --accent: #f5a623;
+  --accent-contrast: #14181f;
+  --danger: #ff6b6b;
+  --success: #4caf7d;
+  --warning: #f5c76a;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Respect notches / home-indicator areas when installed standalone. */
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Minimum practical touch target per spec §45. */
+.tap-target {
+  min-height: 44px;
+  min-width: 44px;
+}
