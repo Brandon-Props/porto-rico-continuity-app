@@ -16,8 +16,13 @@ export function snakeToCamelKey(key: string): string {
 
 /** Fields that exist on the local Dexie record but have no column in Postgres —
  *  sync bookkeeping only. Sending these would make PostgREST reject the whole
- *  upsert with "column ... does not exist". */
-export const LOCAL_ONLY_FIELDS: ReadonlySet<string> = new Set(["dirty", "syncedAt"]);
+ *  upsert with "column ... does not exist". `blobsPending` is stamped onto a
+ *  photo's create payload (src/db/repositories/photos.ts) as a local marker
+ *  that its blob still needs uploading to Storage — there's no Storage upload
+ *  wired up yet (see build notes), and no `blobs_pending` column on the
+ *  `photos` table for it to land in either way, so every photo create was
+ *  failing sync with PGRST204 "Could not find the 'blobs_pending' column". */
+export const LOCAL_ONLY_FIELDS: ReadonlySet<string> = new Set(["dirty", "syncedAt", "blobsPending"]);
 
 export function toSnakeCase(
   obj: Record<string, unknown>,
