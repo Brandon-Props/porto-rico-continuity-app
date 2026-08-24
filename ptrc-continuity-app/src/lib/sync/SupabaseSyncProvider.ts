@@ -242,17 +242,34 @@ export async function pullProductionData(
 }
 
 /** Fetches just the invite code for a production this device already knows
- *  about (used by the Settings screen so an admin can hand it to crew). */
+ *  about (used by the Settings screen so an admin can hand it to crew).
+ *  Returns the real error instead of quietly collapsing every failure into
+ *  the same generic "not available yet" — otherwise a genuinely broken case
+ *  (RLS blocking the read, the row never having synced up at all, the
+ *  invite_code column somehow still null) looks identical to the normal
+ *  "just hasn't synced yet" case, with no way to tell them apart. */
 export async function fetchInviteCode(
   url: string,
   anonKey: string,
   productionId: string
-): Promise<string | null> {
-  await ensureAnonymousSession(url, anonKey);
-  const client = await getAuthedClient(url, anonKey);
-  const { data, error } = await client.from("productions").select("invite_code").eq("id", productionId).maybeSingle();
-  if (error || !data) return null;
-  return (data as { invite_code: string | null }).invite_code;
+): Promise<{ code: string | null; error?: string }> {
+  try {
+    await ensureAnonymousSession(url, anonKey);
+    const client = await getAuthedClient(url, anonKey);
+    const { data, error } = await client.from("productions").select("invite_code").eq("id", productionId).maybeSingle();
+    if (error) return { code: null, error: describeError(error) };
+    if (!data) {
+      return {
+        code: null,
+        error: `No "productions" row visible for id ${productionId} — either it hasn't synced up yet, or this device can't see it under the current membership.`,
+      };
+    }
+    const code = (data as { invite_code: string | null }).invite_code;
+    if (!code) return { code: null, error: "Row found, but its invite_code column is empty." };
+    return { code };
+  } catch (err) {
+    return { code: null, error: describeError(err) };
+  }
 }
 
 /**

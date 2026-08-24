@@ -26,18 +26,30 @@ export default function SettingsPage() {
   const provider = getActiveSyncProvider();
 
   const [inviteCode, setInviteCode] = useState<string | null | "loading">(null);
+  const [inviteCodeError, setInviteCodeError] = useState<string | null>(null);
   const [whoAmI, setWhoAmI] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadInviteCode = () => {
     if (!provider.isConfigured() || !productionId) return;
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? existingOverride?.url;
     const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? existingOverride?.anonKey;
     if (!url || !anonKey) return;
     setInviteCode("loading");
+    setInviteCodeError(null);
     reconcileCloudIdentity(url, anonKey, productionId)
       .then(() => fetchInviteCode(url, anonKey, productionId))
-      .then((code) => setInviteCode(code))
-      .catch(() => setInviteCode(null));
+      .then((result) => {
+        setInviteCode(result.code);
+        setInviteCodeError(result.error ?? null);
+      })
+      .catch((err) => {
+        setInviteCode(null);
+        setInviteCodeError(err instanceof Error ? err.message : String(err));
+      });
+  };
+
+  useEffect(() => {
+    loadInviteCode();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productionId, provider.isConfigured()]);
 
@@ -140,14 +152,18 @@ export default function SettingsPage() {
 
           {provider.isConfigured() && (
             <div className="mt-2 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-                Invite Code — share this with your crew
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                  Invite Code — share this with your crew
+                </div>
+                <button className="text-xs font-semibold text-[var(--accent)]" onClick={loadInviteCode}>
+                  Refresh
+                </button>
               </div>
               {inviteCode === "loading" && <div className="mt-1 text-sm text-[var(--text-muted)]">Fetching…</div>}
               {inviteCode === null && (
                 <div className="mt-1 text-sm text-[var(--text-muted)]">
-                  Not available yet — needs at least one successful sync. Check the Sync screen, or make sure
-                  &quot;Allow anonymous sign-ins&quot; is on in your Supabase project&apos;s Auth settings.
+                  {inviteCodeError ?? "Not available yet — needs at least one successful sync."}
                 </div>
               )}
               {inviteCode && inviteCode !== "loading" && (
