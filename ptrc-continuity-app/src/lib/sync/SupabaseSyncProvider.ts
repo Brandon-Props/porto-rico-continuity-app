@@ -181,11 +181,18 @@ export async function joinProductionByCode(
   if (error) throw new Error(error.message);
   const row = Array.isArray(data) ? data[0] : data;
   if (!row) throw new Error("That invite code didn't match a production.");
+  // Column names deliberately don't match any real table column (see the
+  // 0007 migration note) — join_production_by_code()'s RETURNS TABLE columns
+  // used to be named production_id/role/etc., identical to real columns the
+  // function's own INSERT touches, which made Postgres unable to tell the
+  // two apart ("column reference production_id is ambiguous") the very first
+  // time this function actually ran, despite it type-checking and deploying
+  // fine — plpgsql doesn't catch that kind of collision until execution.
   return {
-    productionId: row.production_id as string,
-    productionName: row.production_name as string,
-    memberId: row.member_id as string,
-    role: row.role as string,
+    productionId: row.joined_production_id as string,
+    productionName: row.joined_production_name as string,
+    memberId: row.joined_member_id as string,
+    role: row.joined_role as string,
   };
 }
 
