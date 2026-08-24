@@ -65,6 +65,13 @@ export async function createProduction(name: string, shortCode: string): Promise
       joinedAt: nowIso(),
     };
     await db.productionMembers.add(member);
+    // This line was missing entirely until now — the creator's own admin
+    // membership row was being added to the local database but never queued
+    // for cloud sync at all (unlike addLocalMember below, which does this
+    // correctly). Every production ever created through this app had its
+    // creator invisible to the cloud database — no error, no failed sync
+    // entry, nothing to notice; it simply never tried.
+    await enqueueSync("production_members", member.id, "create", member);
   }
 
   await enqueueSync("productions", production.id, "create", production);

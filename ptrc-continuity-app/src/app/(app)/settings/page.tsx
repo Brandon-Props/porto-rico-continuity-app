@@ -11,7 +11,8 @@ import { listCategories, addCustomCategory } from "@/db/repositories/categories"
 import { DEFAULT_PHOTO_CATEGORIES } from "@/types";
 import { getSupabaseOverride, setSupabaseOverride, clearSupabaseOverride, getActiveSyncProvider } from "@/lib/sync";
 import { fetchInviteCode, debugWhoAmI } from "@/lib/sync/SupabaseSyncProvider";
-import { reconcileCloudIdentity } from "@/lib/sync/identity";
+import { reconcileCloudIdentity, ensureOwnAdminMembershipSynced } from "@/lib/sync/identity";
+import { syncEngine } from "@/lib/sync/SyncEngine";
 
 export default function SettingsPage() {
   const { mode, setMode } = useTheme();
@@ -36,7 +37,9 @@ export default function SettingsPage() {
     if (!url || !anonKey) return;
     setInviteCode("loading");
     setInviteCodeError(null);
-    reconcileCloudIdentity(url, anonKey, productionId)
+    ensureOwnAdminMembershipSynced(url, anonKey, productionId)
+      .then(() => syncEngine.drain())
+      .then(() => reconcileCloudIdentity(url, anonKey, productionId))
       .then(() => fetchInviteCode(url, anonKey, productionId))
       .then((result) => {
         setInviteCode(result.code);
