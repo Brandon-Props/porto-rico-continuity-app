@@ -120,3 +120,92 @@ export async function updateMemberRole(memberId: string, role: Role) {
   await db.productionMembers.put(member);
   await enqueueSync("production_members", member.id, "update", member);
 }
+
+// Dexie table -> the entityTable name used in syncOperations/enqueueSync for
+// that table (see ENTITY_TO_TABLE in SupabaseSyncProvider.ts). Needed below to
+// clean up any still-queued pushes for rows this function is about to delete.
+const PRODUCTION_SCOPED_TABLES = [
+  { dexie: "shootDays", entity: "shoot_days" },
+  { dexie: "scenes", entity: "scenes" },
+  { dexie: "sceneScheduleEntries", entity: "scene_schedule_entries" },
+  { dexie: "shots", entity: "shots" },
+  { dexie: "takes", entity: "takes" },
+  { dexie: "photos", entity: "photos" },
+  { dexie: "photoAnnotations", entity: "photo_annotations" },
+  { dexie: "continuityNotes", entity: "continuity_notes" },
+  { dexie: "props", entity: "props" },
+  { dexie: "characters", entity: "characters" },
+  { dexie: "productionMembers", entity: "production_members" },
+] as const;
+
+/**
+ * Removes a production from THIS DEVICE ONLY — it never touches Supabase.
+ * Exists for the junk local productions that pile up from working around the
+ * old "no Settings access without an open production" bug (see
+ * SupabaseConnectPanel.tsx — that bug is fixed now, but productions created
+ * that way before the fix still need somewhere to go), or from any other
+ * duplicate/test production someone doesn't want cluttering their list.
+ *
+ * Deliberately local-only and non-destructive to the shared data: if this
+ * happens to be a real production other crew still use, nothing is deleted
+ * on the server, and rejoining with its invite code brings it right back.
+ * Safe to use on a genuine mistake, unlike a real delete would be.
+ */
+export async function removeProductionLocally(productionId: string): Promise<void> {
+  const photos = await db.photos.where({ productionId }).toArray();
+  const photoIds = photos.map((p) => p.id);
+  const blobKeys = photos.flatMap((p) => [p.originalBlobKey, p.displayBlobKey, p.thumbBlobKey].filter(Boolean));
+
+  const allTables = [
+    db.productions,
+    db.productionMembers,
+    db.shootDays,
+    db.scenes,
+    db.sceneScheduleEntries,
+    db.shots,
+    db.takes,
+    db.photos,
+    db.photoAnnotations,
+    db.continuityNotes,
+    db.props,
+    db.characters,
+    db.activityLog,
+    db.syncOperations,
+    db.photoBlobs,
+    db.blobUploads,
+  ];
+
+  await db.transaction("rw", allTables, async () => {
+    const removedIdsByEntity = new Map<string, Set<string>>();
+    removedIdsByEntity.set("productions", new Set([productionId]));
+
+    for (const { dexie, entity } of PRODUCTION_SCOPED_TABLES) {
+      const table = (db as unknown as Record<string, import("dexie").EntityTable<{ id: string }, "id">>)[dexie];
+      const rows = await table.where({ productionId }).toArray();
+      const ids = rows.map((r) => r.id);
+      removedIdsByEntity.set(entity, new Set(ids));
+      if (ids.length > 0) await table.bulkDelete(ids);
+    }
+
+    await db.activityLog.where({ productionId }).delete();
+    await db.productions.delete(productionId);
+    if (blobKeys.length > 0) await db.photoBlobs.bulkDelete(blobKeys);
+    if (photoIds.length > 0) await db.blobUploads.bulkDelete(photoIds);
+
+    // Any push still sitting in the queue for something that no longer
+    // exists locally would just fail forever (or worse, silently recreate a
+    // production that was supposed to be gone) — clear those out too.
+    const allOps = await db.syncOperations.toArray();
+    const staleOpIds = allOps
+      .filter((op) => {
+        const ids = removedIdsByEntity.get(op.entityTable);
+        return ids?.has(op.entityId);
+      })
+      .map((op) => op.id);
+    if (staleOpIds.length > 0) await db.syncOperations.bulkDelete(staleOpIds);
+  });
+
+  if (getActiveProductionId() === productionId) {
+    window.localStorage.removeItem(ACTIVE_KEY);
+  }
+}

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/db/schema";
 import { Button } from "@/components/ui/Button";
-import { createProduction, setActiveProductionId } from "@/db/repositories/productions";
+import { createProduction, setActiveProductionId, removeProductionLocally } from "@/db/repositories/productions";
 import { getCurrentUser } from "@/lib/currentUser";
 
 export default function ProductionsPage() {
@@ -33,6 +33,17 @@ export default function ProductionsPage() {
     router.replace("/today");
   };
 
+  const handleRemove = async (id: string, productionName: string) => {
+    if (
+      !window.confirm(
+        `Remove "${productionName}" from this device's list?\n\nThis only affects this device — if it's a real shared production, nothing is deleted from the cloud, and you can get it back anytime with its invite code.`
+      )
+    ) {
+      return;
+    }
+    await removeProductionLocally(id);
+  };
+
   return (
     <div className="flex min-h-dvh flex-col gap-5 bg-[var(--bg)] px-5 py-8">
       <div>
@@ -46,17 +57,28 @@ export default function ProductionsPage() {
           <p className="text-sm text-[var(--text-muted)]">No productions yet — create one below.</p>
         )}
         {productions?.map((p) => (
-          <button
+          <div
             key={p.id}
-            onClick={() => handleSelect(p.id)}
-            className="tap-target flex items-center justify-between rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-5 py-4 text-left"
+            className="flex items-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface)] pr-2"
           >
-            <div>
-              <div className="text-lg font-bold text-[var(--text)]">{p.name}</div>
-              <div className="text-xs uppercase tracking-wide text-[var(--text-muted)]">{p.shortCode} · {p.status}</div>
-            </div>
-            <span className="text-[var(--text-muted)]">→</span>
-          </button>
+            <button
+              onClick={() => handleSelect(p.id)}
+              className="tap-target flex flex-1 items-center justify-between px-5 py-4 text-left"
+            >
+              <div>
+                <div className="text-lg font-bold text-[var(--text)]">{p.name}</div>
+                <div className="text-xs uppercase tracking-wide text-[var(--text-muted)]">{p.shortCode} · {p.status}</div>
+              </div>
+              <span className="text-[var(--text-muted)]">→</span>
+            </button>
+            <button
+              onClick={() => handleRemove(p.id, p.name)}
+              aria-label={`Remove ${p.name} from this device`}
+              className="tap-target rounded-xl px-3 py-2 text-lg text-[var(--text-muted)]"
+            >
+              🗑
+            </button>
+          </div>
         ))}
       </div>
 

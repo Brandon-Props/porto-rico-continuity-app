@@ -1,13 +1,20 @@
 "use client";
 
+import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { TopBar } from "@/components/TopBar";
 import { Button } from "@/components/ui/Button";
 import { db } from "@/db/schema";
 import { syncEngine } from "@/lib/sync/SyncEngine";
 import { useSyncStatus } from "@/hooks/useSyncStatus";
-import { getActiveSyncProvider } from "@/lib/sync";
+import { getActiveSyncProvider, getSupabaseOverride } from "@/lib/sync";
 import { SYNC_PROVIDER_BUILD } from "@/lib/sync/SupabaseSyncProvider";
+import { getActiveProductionId } from "@/db/repositories/productions";
+import { hydrateProductionFromCloud } from "@/lib/sync/hydrate";
+import { queueMissingBlobUploads } from "@/lib/sync/blobSync";
+
+const ENV_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const ENV_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 const STATE_COPY: Record<string, { title: string; body: string }> = {
   offline: { title: "OFFLINE", body: "No connection right now. Everything you do is saved locally and will sync automatically once you're back online." },
@@ -24,6 +31,36 @@ export default function SyncQueuePage() {
   const failed = useLiveQuery(() => db.syncOperations.where("status").equals("failed").reverse().sortBy("createdAt"), []);
   const copy = STATE_COPY[status.state];
 
+  // Everything above is about PUSH — what this device still needs to send up.
+  // There was no visible way to ask "has anyone ELSE added anything I don't
+  // have yet" — the app only checked that automatically on a cold start, so a
+  // crew member's new photo could sit fully synced in the cloud for hours
+  // before this device happened to notice. This button asks right now.
+  const [pulling, setPulling] = useState(false);
+  const [pullResult, setPullResult] = useState<string | null>(null);
+
+  const handleGetLatest = async () => {
+    const productionId = getActiveProductionId();
+    const override = getSupabaseOverride();
+    const url = ENV_URL ?? override?.url;
+    const anonKey = ENV_KEY ?? override?.anonKey;
+    if (!productionId || !url || !anonKey) {
+      setPullResult("Not connected to the cloud yet.");
+      return;
+    }
+    setPulling(true);
+    setPullResult(null);
+    try {
+      const result = await hydrateProductionFromCloud(url, anonKey, productionId);
+      await queueMissingBlobUploads();
+      setPullResult(result.applied > 0 ? `Got ${result.applied} new or updated item${result.applied === 1 ? "" : "s"}.` : "Already up to date — nothing new.");
+    } catch (err) {
+      setPullResult(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPulling(false);
+    }
+  };
+
   return (
     <div className="flex flex-col">
       <TopBar title="Sync Status" />
@@ -36,6 +73,22 @@ export default function SyncQueuePage() {
           <p className="mt-1 text-[10px] text-[var(--text-muted)]">Sync code build: {SYNC_PROVIDER_BUILD}</p>
         </div>
       </div>
+
+      {provider.isConfigured() && (
+        <div className="px-4 pt-4">
+          <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="font-bold text-[var(--text)]">Other People&apos;s Photos & Changes</div>
+            <p className="mt-1 text-xs text-[var(--text-muted)]">
+              This device checks for new stuff from the rest of the crew automatically every so often while the app is
+              open. Tap this to check right now instead of waiting.
+            </p>
+            <Button fullWidth className="mt-2" onClick={handleGetLatest} disabled={pulling}>
+              {pulling ? "Checking…" : "Get Latest From Cloud"}
+            </Button>
+            {pullResult && <p className="mt-2 text-sm text-[var(--text-muted)]">{pullResult}</p>}
+          </div>
+        </div>
+      )}
 
       {failed && failed.length > 0 && (
         <div className="flex flex-col gap-2 px-4 pt-4">

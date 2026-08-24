@@ -30,9 +30,18 @@ function backgroundCloudSync(productionId: string) {
     });
 }
 
+// How often to check for other crew members' new photos/scenes while the app
+// is sitting open. Cold-open alone (the original behavior) meant a photo
+// someone else took could be fully synced and sitting in the cloud for hours
+// before this device happened to notice — confirmed 2026-08-24 when a crew
+// member's photos showed up fine on one device but not another that had just
+// been left open in the background the whole time.
+const BACKGROUND_PULL_INTERVAL_MS = 25_000;
+
 export function AppGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [ready, setReady] = useState(false);
+  const [productionId, setProductionId] = useState<string | null>(null);
 
   useEffect(() => {
     const user = getCurrentUser();
@@ -40,14 +49,34 @@ export function AppGuard({ children }: { children: ReactNode }) {
       router.replace("/login");
       return;
     }
-    const productionId = getActiveProductionId();
-    if (!productionId) {
+    const pid = getActiveProductionId();
+    if (!pid) {
       router.replace("/productions");
       return;
     }
+    setProductionId(pid);
     setReady(true);
-    backgroundCloudSync(productionId);
+    backgroundCloudSync(pid);
   }, [router]);
+
+  useEffect(() => {
+    if (!productionId) return;
+    // Poll lightly while the tab/app is actually visible, and also pull the
+    // instant it becomes visible again after being backgrounded — covers
+    // both "left it open on the Today screen all afternoon" and "switched
+    // away to texts and came right back."
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") backgroundCloudSync(productionId);
+    }, BACKGROUND_PULL_INTERVAL_MS);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") backgroundCloudSync(productionId);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [productionId]);
 
   if (!ready) {
     return (
