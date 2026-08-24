@@ -16,13 +16,28 @@ export function snakeToCamelKey(key: string): string {
 
 /** Fields that exist on the local Dexie record but have no column in Postgres —
  *  sync bookkeeping only. Sending these would make PostgREST reject the whole
- *  upsert with "column ... does not exist". `blobsPending` is stamped onto a
- *  photo's create payload (src/db/repositories/photos.ts) as a local marker
- *  that its blob still needs uploading to Storage — there's no Storage upload
- *  wired up yet (see build notes), and no `blobs_pending` column on the
- *  `photos` table for it to land in either way, so every photo create was
- *  failing sync with PGRST204 "Could not find the 'blobs_pending' column". */
-export const LOCAL_ONLY_FIELDS: ReadonlySet<string> = new Set(["dirty", "syncedAt", "blobsPending"]);
+ *  upsert with "column ... does not exist".
+ *
+ *  `blobsPending` is stamped onto a photo's create payload
+ *  (src/db/repositories/photos.ts) as a local marker that its blob still
+ *  needs uploading to Storage.
+ *
+ *  `originalBlobKey`/`displayBlobKey`/`thumbBlobKey` are references into this
+ *  device's own local blob storage (IndexedDB) — not the same thing as the
+ *  `*_storage_path` columns on the `photos` table, which are meant to hold a
+ *  path in Supabase Storage once actual photo upload is built (see build
+ *  notes "known gaps" — it isn't yet). A local blob key has no meaningful
+ *  value to put there, and there's no column matching these names anyway, so
+ *  every photo create was failing sync with PGRST204 "Could not find the
+ *  '...' column of 'photos'" for one of these three in turn. */
+export const LOCAL_ONLY_FIELDS: ReadonlySet<string> = new Set([
+  "dirty",
+  "syncedAt",
+  "blobsPending",
+  "originalBlobKey",
+  "displayBlobKey",
+  "thumbBlobKey",
+]);
 
 export function toSnakeCase(
   obj: Record<string, unknown>,
