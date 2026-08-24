@@ -220,14 +220,52 @@ export class SupabaseSyncProvider implements SyncProvider {
       // guess from outside the app while a plain "auth.uid() is not null" check
       // keeps failing for reasons that aren't visible from the Supabase dashboard.
       let uid = "NONE";
+      let jwtInfo = "";
       try {
         const { data: sessionCheck } = await getClient(this.url, this.anonKey).auth.getSession();
         uid = sessionCheck.session?.user?.id ?? "NONE";
+        const token = sessionCheck.session?.access_token;
+        // The uid above only proves the app THINKS it's signed in. Decoding the
+        // actual JWT the request just sent shows what Postgres itself saw: is
+        // there really a `sub` claim, is `role` really "authenticated", and —
+        // most likely culprit for a session that's been sitting around since
+        // yesterday — has it quietly expired without a fresh one replacing it.
+        if (token) {
+          const claims = decodeJwtPayload(token);
+          if (claims) {
+            const role = String(claims.role ?? "?");
+            const sub = String(claims.sub ?? "?");
+            const expNum = typeof claims.exp === "number" ? claims.exp : null;
+            const expStr = expNum ? new Date(expNum * 1000).toISOString() : "?";
+            const expired = expNum !== null && expNum * 1000 < Date.now();
+            jwtInfo = ` [jwt role=${role} sub=${sub} exp=${expStr}${expired ? " EXPIRED" : ""}]`;
+          } else {
+            jwtInfo = " [jwt: could not decode]";
+          }
+        } else {
+          jwtInfo = " [jwt: no access_token on session]";
+        }
       } catch {
         uid = "unknown";
       }
-      return { success: false, error: `${describeError(err)} (signed in as: ${uid})` };
+      return { success: false, error: `${describeError(err)} (signed in as: ${uid})${jwtInfo}` };
     }
+  }
+}
+
+/** Pulls the payload (claims) out of a JWT without verifying its signature —
+ *  this only ever runs on our own already-issued session token, purely to show
+ *  what's actually inside it (role / sub / expiry) when a request using it
+ *  still gets rejected. Not for trust decisions, just for on-screen diagnosis. */
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const json = typeof atob === "function" ? atob(base64) : Buffer.from(base64, "base64").toString("utf-8");
+    return JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    return null;
   }
 }
 
