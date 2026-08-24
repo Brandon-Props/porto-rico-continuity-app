@@ -10,7 +10,27 @@ import { toSnakeCase, toCamelCase } from "./caseTransform";
 // stale cached bundle. src/app/(app)/sync/page.tsx displays this — if it
 // doesn't match the value in this exact file, that device has not picked up
 // the latest deploy yet, full stop, no need to interpret error text at all.
-export const SYNC_PROVIDER_BUILD = "plain-insert-v2";
+export const SYNC_PROVIDER_BUILD = "sync-timeout-v3";
+
+/** A stuck network request previously had no way to give up, freezing that
+ *  queue item on "syncing" forever and blocking everything behind it — no
+ *  error, no retry, just a permanently spinning Sync Status screen. This
+ *  guarantees push() always settles one way or the other. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
 
 // Table names line up 1:1 with supabase/migrations/0001_init.sql.
 const ENTITY_TO_TABLE: Record<string, string> = {
@@ -257,35 +277,49 @@ export class SupabaseSyncProvider implements SyncProvider {
     if (!table) return { success: false, error: `No table mapping for ${op.entityTable}` };
 
     try {
-      await ensureAnonymousSession(this.url, this.anonKey);
-      const supabase = await getAuthedClient(this.url, this.anonKey);
-      if (op.op === "delete") {
-        const { error } = await supabase.from(table).update({ deleted_at: new Date().toISOString() }).eq("id", op.entityId);
-        if (error) throw error;
-      } else if (op.op === "create") {
-        // Root cause of every single "· create — 42501" error we've been
-        // chasing: a bare upsert(..., {onConflict:"id"}) becomes, in Postgres,
-        // "INSERT ... ON CONFLICT (id) DO UPDATE" — and Postgres's row-level
-        // security requires the UPDATE policy to be satisfiable for that
-        // statement shape even when no row actually exists to conflict with
-        // yet. Every production-scoped table's update policy requires already
-        // being a member of the production — impossible for a brand new row
-        // nobody is a member of yet. A plain insert only ever needs the
-        // INSERT policy — no conflict-resolution mode to second-guess. If this
-        // exact row already made it through on an earlier attempt, Postgres
-        // reports a duplicate-key error (23505); treat that as success rather
-        // than a real failure, since the row is already there either way.
-        const payload = toSnakeCase(op.payload as Record<string, unknown>);
-        const { error } = await supabase.from(table).insert(payload);
-        if (error && (error as { code?: string }).code !== "23505") throw error;
-      } else {
-        // A genuine update to a row the caller is already a member of — the
-        // update policy's is_member_of(production_id) check is appropriate
-        // here, unlike on a first-time create.
-        const payload = toSnakeCase(op.payload as Record<string, unknown>);
-        const { error } = await supabase.from(table).update(payload).eq("id", op.entityId);
-        if (error) throw error;
-      }
+      // A hung fetch (bad signal, dropped connection mid-request) previously
+      // had no way to give up — drain() awaits push() one item at a time, so
+      // a single stuck request froze this item on "syncing" forever and
+      // blocked every queued item behind it too, with no error ever shown.
+      // Racing the whole attempt against a timeout guarantees it always
+      // resolves one way or the other.
+      await withTimeout(
+        (async () => {
+          await ensureAnonymousSession(this.url!, this.anonKey!);
+          const supabase = await getAuthedClient(this.url!, this.anonKey!);
+          if (op.op === "delete") {
+            const { error } = await supabase.from(table).update({ deleted_at: new Date().toISOString() }).eq("id", op.entityId);
+            if (error) throw error;
+          } else if (op.op === "create") {
+            // Root cause of every single "· create — 42501" error we've been
+            // chasing: a bare upsert(..., {onConflict:"id"}) becomes, in
+            // Postgres, "INSERT ... ON CONFLICT (id) DO UPDATE" — and
+            // Postgres's row-level security requires the UPDATE policy to be
+            // satisfiable for that statement shape even when no row actually
+            // exists to conflict with yet. Every production-scoped table's
+            // update policy requires already being a member of the
+            // production — impossible for a brand new row nobody is a member
+            // of yet. A plain insert only ever needs the INSERT policy — no
+            // conflict-resolution mode to second-guess. If this exact row
+            // already made it through on an earlier attempt, Postgres
+            // reports a duplicate-key error (23505); treat that as success
+            // rather than a real failure, since the row is already there
+            // either way.
+            const payload = toSnakeCase(op.payload as Record<string, unknown>);
+            const { error } = await supabase.from(table).insert(payload);
+            if (error && (error as { code?: string }).code !== "23505") throw error;
+          } else {
+            // A genuine update to a row the caller is already a member of —
+            // the update policy's is_member_of(production_id) check is
+            // appropriate here, unlike on a first-time create.
+            const payload = toSnakeCase(op.payload as Record<string, unknown>);
+            const { error } = await supabase.from(table).update(payload).eq("id", op.entityId);
+            if (error) throw error;
+          }
+        })(),
+        20000,
+        "Sync request"
+      );
       return { success: true };
     } catch (err) {
       // Prove, at the exact moment of the failing request, whether this device
