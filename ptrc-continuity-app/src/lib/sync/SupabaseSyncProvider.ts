@@ -2,6 +2,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { SyncOperation } from "@/types";
 import type { SyncProvider } from "./SyncProvider";
 import { toSnakeCase, toCamelCase } from "./caseTransform";
+import { uploadPendingBlobs as uploadPendingBlobsImpl } from "./blobSync";
 
 // Bumped by hand on every change to this file's push() logic. The error text
 // this file produces looks identical across several recent fixes (same
@@ -381,6 +382,14 @@ export class SupabaseSyncProvider implements SyncProvider {
       }
       return { success: false, error: `${describeError(err)} (signed in as: ${uid})${jwtInfo}` };
     }
+  }
+
+  /** Delegates to blobSync.ts — kept as a thin method here so SyncEngine.drain()
+   *  can call it through the same SyncProvider interface every other push goes
+   *  through, without needing to know Supabase Storage is involved at all. */
+  async uploadPendingBlobs(): Promise<void> {
+    if (!this.url || !this.anonKey) return;
+    await uploadPendingBlobsImpl(this.url, this.anonKey);
   }
 }
 

@@ -86,7 +86,26 @@ export async function hydrateProductionFromCloud(
         skippedNewerLocal++;
         continue;
       }
-      await table.put({ ...remote, dirty: false, syncedAt: nowIso() });
+      // originalBlobKey/displayBlobKey/thumbBlobKey are LOCAL_ONLY_FIELDS
+      // (caseTransform.ts) — they never leave this device and never come back
+      // from Postgres, so a photo row pulled down from another device arrives
+      // with none of them. Without a value here, every photo viewer
+      // (usePhotoBlobUrl/PhotoThumb) has nothing to even look up. Derive them
+      // the exact same deterministic way capturePhoto() originally created
+      // them (`${photoId}_original` etc.) so the lookup key lines up whether
+      // this device captured the photo or pulled it from someone else — the
+      // actual image bytes then arrive lazily via getPhotoBlob()'s Storage
+      // fallback (src/lib/sync/blobSync.ts) the first time something tries
+      // to display it.
+      const photoKeyFields =
+        entity === "photos"
+          ? {
+              originalBlobKey: `${remote.id}_original`,
+              displayBlobKey: `${remote.id}_display`,
+              thumbBlobKey: `${remote.id}_thumb`,
+            }
+          : {};
+      await table.put({ ...remote, ...photoKeyFields, dirty: false, syncedAt: nowIso() });
       applied++;
     }
   }

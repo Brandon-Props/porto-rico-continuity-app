@@ -31,6 +31,19 @@ export interface AnnotationBlobRecord {
   blob: Blob;
 }
 
+/** One row per photo whose image still needs uploading to Supabase Storage
+ *  (see src/lib/sync/blobSync.ts) — separate from syncOperations because a
+ *  blob upload isn't a row-level Postgres write, it's a Storage API call, and
+ *  large binaries deserve their own retry/status tracking rather than sharing
+ *  a queue with small JSON row pushes. */
+export interface BlobUploadRecord {
+  photoId: string;
+  status: "pending" | "syncing" | "done" | "failed";
+  attemptCount: number;
+  lastError?: string;
+  createdAt: string;
+}
+
 export class ContinuityDB extends Dexie {
   localUsers!: EntityTable<LocalUser, "id">;
   productions!: EntityTable<Production, "id">;
@@ -50,6 +63,7 @@ export class ContinuityDB extends Dexie {
   deletedItems!: EntityTable<DeletedItem, "id">;
   photoBlobs!: EntityTable<PhotoBlobRecord, "key">;
   annotationBlobs!: EntityTable<AnnotationBlobRecord, "key">;
+  blobUploads!: EntityTable<BlobUploadRecord, "photoId">;
 
   constructor() {
     super("ptrc-continuity");
@@ -75,6 +89,12 @@ export class ContinuityDB extends Dexie {
       deletedItems: "id, entityTable, entityId, deletedAt",
       photoBlobs: "key, photoId, variant",
       annotationBlobs: "key, annotationId",
+    });
+
+    // New table only — Dexie carries every unchanged store over automatically,
+    // so existing installs upgrade in place without losing anything.
+    this.version(2).stores({
+      blobUploads: "photoId, status, createdAt",
     });
   }
 }

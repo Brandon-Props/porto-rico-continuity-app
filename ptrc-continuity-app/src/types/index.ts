@@ -270,9 +270,19 @@ export interface Photo extends SyncableFields {
   takeId?: string | null;
   sceneId: string;
   shotId?: string | null;
+  /** Local-only IndexedDB lookup keys (see LOCAL_ONLY_FIELDS in
+   *  caseTransform.ts) — never sent to or read from Postgres directly. A
+   *  photo pulled down from another device gets these derived the same
+   *  deterministic way capturePhoto() creates them (see hydrate.ts). */
   originalBlobKey: string;
   displayBlobKey: string;
   thumbBlobKey: string;
+  /** Set once this device has uploaded the actual image to Supabase Storage
+   *  (see src/lib/sync/blobSync.ts). Null/undefined means only the metadata
+   *  above has synced — the picture itself isn't in the cloud yet. */
+  originalStoragePath?: string | null;
+  displayStoragePath?: string | null;
+  thumbStoragePath?: string | null;
   category: string;
   cameraDeviceLabel?: string; // A CAM / B CAM / phone label
   takenBy: string;

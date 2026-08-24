@@ -113,6 +113,12 @@ class SyncEngineImpl {
           });
         }
       }
+
+      // Row sync above only ever moved metadata — the actual photo image
+      // still needs a separate trip to Supabase Storage (see
+      // src/lib/sync/blobSync.ts). Runs on this same 4-second cadence so a
+      // captured photo's picture reaches the cloud without any extra action.
+      await provider.uploadPendingBlobs?.();
     } finally {
       this.draining = false;
       this.emitCurrent();

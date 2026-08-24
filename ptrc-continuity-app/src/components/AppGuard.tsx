@@ -7,6 +7,7 @@ import { getActiveProductionId } from "@/db/repositories/productions";
 import { getActiveSyncProvider, getSupabaseOverride } from "@/lib/sync";
 import { reconcileCloudIdentity } from "@/lib/sync/identity";
 import { hydrateProductionFromCloud } from "@/lib/sync/hydrate";
+import { queueMissingBlobUploads } from "@/lib/sync/blobSync";
 
 const ENV_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const ENV_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -23,6 +24,7 @@ function backgroundCloudSync(productionId: string) {
   if (!url || !anonKey) return;
   reconcileCloudIdentity(url, anonKey, productionId)
     .then(() => hydrateProductionFromCloud(url, anonKey, productionId))
+    .then(() => queueMissingBlobUploads())
     .catch(() => {
       /* offline or not-yet-reachable — the sync badge on /sync reflects real state */
     });

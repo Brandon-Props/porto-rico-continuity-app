@@ -5,6 +5,7 @@ import type { Photo, PhotoFlag } from "@/types";
 import { baseFields, enqueueSync, logActivity, newId, nowIso, touch } from "./helpers";
 import { buildPhotoVariants } from "@/lib/camera/imageProcessing";
 import { getCurrentUser } from "@/lib/currentUser";
+import { queueBlobUpload, fetchAndCachePhotoBlob } from "@/lib/sync/blobSync";
 
 export interface CapturePhotoInput {
   sceneId: string;
@@ -54,6 +55,10 @@ export async function capturePhoto(originalBlob: Blob, input: CapturePhotoInput)
   });
 
   await enqueueSync("photos", photo.id, "create", { ...photo, blobsPending: true });
+  // Metadata above is queued for the row-sync path; the actual image bytes
+  // travel separately over Supabase Storage (see src/lib/sync/blobSync.ts) —
+  // queue that too so this photo's picture, not just its row, reaches the cloud.
+  await queueBlobUpload(photo.id);
   if (scene) {
     await logActivity(scene.productionId, `captured a ${input.category} photo on Scene ${scene.sceneNumber}`, "photos", photo.id);
   }
@@ -66,7 +71,19 @@ export async function getPhoto(id: string): Promise<Photo | undefined> {
 
 export async function getPhotoBlob(key: string): Promise<Blob | undefined> {
   const rec = await db.photoBlobs.get(key);
-  return rec?.blob;
+  if (rec) return rec.blob;
+
+  // Not cached on this device — most likely a photo pulled down from another
+  // device (see hydrate.ts) whose row arrived but whose actual image never
+  // did. Work out which photo/variant this key is for and fetch it from
+  // Supabase Storage instead, caching it locally so every view after this
+  // first one is instant and works offline.
+  const variant = key.endsWith("_original") ? "original" : key.endsWith("_display") ? "display" : key.endsWith("_thumb") ? "thumb" : null;
+  if (!variant) return undefined;
+  const photoId = key.slice(0, key.length - (variant.length + 1));
+  const photo = await db.photos.get(photoId);
+  if (!photo) return undefined;
+  return fetchAndCachePhotoBlob(photo, variant);
 }
 
 export async function listPhotosForScene(sceneId: string): Promise<Photo[]> {

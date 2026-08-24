@@ -12,4 +12,8 @@ export interface SyncProvider {
   isConfigured(): boolean;
   /** Push one queued operation. Must be idempotent — retried pushes must not duplicate data. */
   push(op: SyncOperation): Promise<{ success: boolean; error?: string }>;
+  /** Upload any photo images still waiting to reach cloud storage (see
+   *  src/lib/sync/blobSync.ts). Optional — a provider with no blob storage of
+   *  its own (or the offline no-op provider) simply omits this. */
+  uploadPendingBlobs?(): Promise<void>;
 }
