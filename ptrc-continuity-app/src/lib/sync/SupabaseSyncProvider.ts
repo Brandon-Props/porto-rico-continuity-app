@@ -261,13 +261,14 @@ export class SupabaseSyncProvider implements SyncProvider {
         // statement shape even when no row actually exists to conflict with
         // yet. Every production-scoped table's update policy requires already
         // being a member of the production — impossible for a brand new row
-        // nobody is a member of yet. ignoreDuplicates switches this to
-        // "... DO NOTHING", which only ever needs the INSERT policy — retries
-        // of an already-succeeded create still behave safely (id already
-        // there, nothing happens), just without the impossible UPDATE check.
+        // nobody is a member of yet. A plain insert only ever needs the
+        // INSERT policy — no conflict-resolution mode to second-guess. If this
+        // exact row already made it through on an earlier attempt, Postgres
+        // reports a duplicate-key error (23505); treat that as success rather
+        // than a real failure, since the row is already there either way.
         const payload = toSnakeCase(op.payload as Record<string, unknown>);
-        const { error } = await supabase.from(table).upsert(payload, { onConflict: "id", ignoreDuplicates: true });
-        if (error) throw error;
+        const { error } = await supabase.from(table).insert(payload);
+        if (error && (error as { code?: string }).code !== "23505") throw error;
       } else {
         // A genuine update to a row the caller is already a member of — the
         // update policy's is_member_of(production_id) check is appropriate
