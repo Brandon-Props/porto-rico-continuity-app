@@ -253,12 +253,27 @@ export class SupabaseSyncProvider implements SyncProvider {
       if (op.op === "delete") {
         const { error } = await supabase.from(table).update({ deleted_at: new Date().toISOString() }).eq("id", op.entityId);
         if (error) throw error;
-      } else {
-        // Idempotent upsert keyed by the client-generated UUID — retries never
-        // duplicate data (spec §59). Dexie's camelCase record has to become the
-        // snake_case row Postgres actually has columns for first.
+      } else if (op.op === "create") {
+        // Root cause of every single "· create — 42501" error we've been
+        // chasing: a bare upsert(..., {onConflict:"id"}) becomes, in Postgres,
+        // "INSERT ... ON CONFLICT (id) DO UPDATE" — and Postgres's row-level
+        // security requires the UPDATE policy to be satisfiable for that
+        // statement shape even when no row actually exists to conflict with
+        // yet. Every production-scoped table's update policy requires already
+        // being a member of the production — impossible for a brand new row
+        // nobody is a member of yet. ignoreDuplicates switches this to
+        // "... DO NOTHING", which only ever needs the INSERT policy — retries
+        // of an already-succeeded create still behave safely (id already
+        // there, nothing happens), just without the impossible UPDATE check.
         const payload = toSnakeCase(op.payload as Record<string, unknown>);
-        const { error } = await supabase.from(table).upsert(payload, { onConflict: "id" });
+        const { error } = await supabase.from(table).upsert(payload, { onConflict: "id", ignoreDuplicates: true });
+        if (error) throw error;
+      } else {
+        // A genuine update to a row the caller is already a member of — the
+        // update policy's is_member_of(production_id) check is appropriate
+        // here, unlike on a first-time create.
+        const payload = toSnakeCase(op.payload as Record<string, unknown>);
+        const { error } = await supabase.from(table).update(payload).eq("id", op.entityId);
         if (error) throw error;
       }
       return { success: true };
