@@ -45,19 +45,36 @@ function getClient(url: string, anonKey: string): SupabaseClient {
  * Requires "Allow anonymous sign-ins" turned on in the Supabase project's
  * Authentication settings — off by default on a new project.
  */
+// Several parts of the app (background sync on load, the queue drain, Settings)
+// can all call ensureAnonymousSession within the same instant before any of them
+// has a session yet. Without sharing one in-flight sign-in, each caller saw "no
+// session" and called signInAnonymously() independently — creating a separate
+// throwaway anonymous auth.users row per caller instead of one identity for the
+// device, and leaving it up to timing which session actually ended up persisted.
+let inFlightAnonSignIn: Promise<string> | null = null;
+
 export async function ensureAnonymousSession(url: string, anonKey: string): Promise<string> {
   const client = getClient(url, anonKey);
   const { data: sessionData } = await client.auth.getSession();
   if (sessionData.session?.user?.id) return sessionData.session.user.id;
 
-  const { data, error } = await client.auth.signInAnonymously();
-  if (error || !data.user) {
-    throw new Error(
-      error?.message ??
-        "Could not start a Supabase session. In your Supabase project, go to Authentication → Sign In / Providers and turn on \"Allow anonymous sign-ins\"."
-    );
+  if (!inFlightAnonSignIn) {
+    inFlightAnonSignIn = client.auth
+      .signInAnonymously()
+      .then(({ data, error }) => {
+        if (error || !data.user) {
+          throw new Error(
+            error?.message ??
+              "Could not start a Supabase session. In your Supabase project, go to Authentication → Sign In / Providers and turn on \"Allow anonymous sign-ins\"."
+          );
+        }
+        return data.user.id;
+      })
+      .finally(() => {
+        inFlightAnonSignIn = null;
+      });
   }
-  return data.user.id;
+  return inFlightAnonSignIn;
 }
 
 export interface JoinedProduction {
@@ -172,7 +189,18 @@ export class SupabaseSyncProvider implements SyncProvider {
       }
       return { success: true };
     } catch (err) {
-      return { success: false, error: describeError(err) };
+      // Prove, at the exact moment of the failing request, whether this device
+      // actually has a session and which user it is — rather than continuing to
+      // guess from outside the app while a plain "auth.uid() is not null" check
+      // keeps failing for reasons that aren't visible from the Supabase dashboard.
+      let uid = "NONE";
+      try {
+        const { data: sessionCheck } = await getClient(this.url, this.anonKey).auth.getSession();
+        uid = sessionCheck.session?.user?.id ?? "NONE";
+      } catch {
+        uid = "unknown";
+      }
+      return { success: false, error: `${describeError(err)} (signed in as: ${uid})` };
     }
   }
 }
