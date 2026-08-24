@@ -77,6 +77,32 @@ export async function ensureAnonymousSession(url: string, anonKey: string): Prom
   return inFlightAnonSignIn;
 }
 
+// The confirmed puzzle: a real, valid anonymous session exists (proven — its uid
+// shows up in auth.users AND in the failed-push diagnostic above), yet a
+// trivial `auth.uid() is not null` check still fails server-side. The only
+// thing that reconciles both facts is that the actual REST request isn't
+// carrying that session's JWT as its Authorization header — supabase-js is
+// supposed to keep a client's ambient header in sync with its current session
+// automatically, but apparently isn't doing so reliably here (most likely
+// because more than one client/module instance ends up in play — see the
+// getClient cache above and the race this file already works around once).
+// Rather than depend on that ambient behavior, stamp the access token onto
+// the request explicitly every time, so it cannot be stale or missing.
+let authedClientCache: { token: string; client: SupabaseClient } | null = null;
+
+async function getAuthedClient(url: string, anonKey: string): Promise<SupabaseClient> {
+  const base = getClient(url, anonKey);
+  const { data } = await base.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) return base; // caller already ran ensureAnonymousSession; let it fail naturally if truly no session
+  if (authedClientCache?.token === token) return authedClientCache.client;
+  const client = createClient(url, anonKey, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+  });
+  authedClientCache = { token, client };
+  return client;
+}
+
 export interface JoinedProduction {
   productionId: string;
   productionName: string;
@@ -96,7 +122,7 @@ export async function joinProductionByCode(
   displayName: string
 ): Promise<JoinedProduction> {
   await ensureAnonymousSession(url, anonKey);
-  const client = getClient(url, anonKey);
+  const client = await getAuthedClient(url, anonKey);
   const { data, error } = await client.rpc("join_production_by_code", {
     p_code: code.trim(),
     p_display_name: displayName,
@@ -123,7 +149,7 @@ export async function pullProductionData(
   productionId: string
 ): Promise<Record<string, Record<string, unknown>[]>> {
   await ensureAnonymousSession(url, anonKey);
-  const client = getClient(url, anonKey);
+  const client = await getAuthedClient(url, anonKey);
   const results: Record<string, Record<string, unknown>[]> = {};
 
   for (const [entity, table] of Object.entries(ENTITY_TO_TABLE)) {
@@ -146,7 +172,7 @@ export async function fetchInviteCode(
   productionId: string
 ): Promise<string | null> {
   await ensureAnonymousSession(url, anonKey);
-  const client = getClient(url, anonKey);
+  const client = await getAuthedClient(url, anonKey);
   const { data, error } = await client.from("productions").select("invite_code").eq("id", productionId).maybeSingle();
   if (error || !data) return null;
   return (data as { invite_code: string | null }).invite_code;
@@ -175,7 +201,7 @@ export class SupabaseSyncProvider implements SyncProvider {
 
     try {
       await ensureAnonymousSession(this.url, this.anonKey);
-      const supabase = getClient(this.url, this.anonKey);
+      const supabase = await getAuthedClient(this.url, this.anonKey);
       if (op.op === "delete") {
         const { error } = await supabase.from(table).update({ deleted_at: new Date().toISOString() }).eq("id", op.entityId);
         if (error) throw error;
