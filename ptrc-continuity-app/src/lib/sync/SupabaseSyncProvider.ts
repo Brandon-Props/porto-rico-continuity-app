@@ -10,7 +10,7 @@ import { toSnakeCase, toCamelCase } from "./caseTransform";
 // stale cached bundle. src/app/(app)/sync/page.tsx displays this — if it
 // doesn't match the value in this exact file, that device has not picked up
 // the latest deploy yet, full stop, no need to interpret error text at all.
-export const SYNC_PROVIDER_BUILD = "sync-timeout-v3";
+export const SYNC_PROVIDER_BUILD = "sync-timeout-v4";
 
 /** A stuck network request previously had no way to give up, freezing that
  *  queue item on "syncing" forever and blocking everything behind it — no

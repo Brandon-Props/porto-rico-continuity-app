@@ -77,6 +77,20 @@ class SyncEngineImpl {
     }
     this.draining = true;
     try {
+      // A row can be left stuck at "syncing" forever if the app was closed,
+      // crashed, or lost its connection mid-request — the timeout added to
+      // SupabaseSyncProvider.push() only rescues a request that's still
+      // actually running; it can't help one whose whole page was torn down
+      // mid-flight, since there's no live promise left to time out. Any
+      // "syncing" row found at the START of a fresh drain() can't legitimately
+      // still be in flight from this same session (the `draining` guard above
+      // prevents two drains overlapping), so it's always safe to treat it as
+      // abandoned and hand it back to the normal pending queue below.
+      const orphaned = await db.syncOperations.where("status").equals("syncing").toArray();
+      if (orphaned.length > 0) {
+        await Promise.all(orphaned.map((op) => db.syncOperations.update(op.id, { status: "pending" })));
+      }
+
       const pending = await db.syncOperations.where("status").equals("pending").sortBy("createdAt");
       for (let i = 0; i < pending.length; i++) {
         const op = pending[i];
