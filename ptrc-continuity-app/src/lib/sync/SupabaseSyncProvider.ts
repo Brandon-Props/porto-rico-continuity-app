@@ -56,7 +56,29 @@ let inFlightAnonSignIn: Promise<string> | null = null;
 export async function ensureAnonymousSession(url: string, anonKey: string): Promise<string> {
   const client = getClient(url, anonKey);
   const { data: sessionData } = await client.auth.getSession();
-  if (sessionData.session?.user?.id) return sessionData.session.user.id;
+  const session = sessionData.session;
+  // getSession() is supposed to auto-refresh a stale token on its own, but that
+  // relies on a timer that a backgrounded/installed PWA doesn't reliably keep
+  // running — a session created hours ago can come back here looking "present"
+  // while its access token has actually already expired. Treat anything expired
+  // or about to expire as not good enough, rather than trusting user?.id alone.
+  const expiresAtMs = session?.expires_at ? session.expires_at * 1000 : 0;
+  const stillFresh = Boolean(session?.user?.id) && expiresAtMs > Date.now() + 30_000;
+  if (stillFresh) return session!.user!.id;
+
+  if (session?.user?.id) {
+    // Same device identity, the token just needs renewing — refresh it instead
+    // of signing in as a brand new anonymous user, which would silently orphan
+    // this device's existing membership rows under an id nothing points to anymore.
+    try {
+      const { data: refreshed, error: refreshError } = await client.auth.refreshSession();
+      if (!refreshError && refreshed.session?.user?.id) {
+        return refreshed.session.user.id;
+      }
+    } catch {
+      /* fall through to a fresh sign-in below */
+    }
+  }
 
   if (!inFlightAnonSignIn) {
     inFlightAnonSignIn = client.auth
@@ -136,6 +158,32 @@ export async function joinProductionByCode(
     memberId: row.member_id as string,
     role: row.role as string,
   };
+}
+
+/** Decisive test for the productions-insert mystery: everything we can check
+ *  from the client (session exists, correct project, role=authenticated,
+ *  sub present, token not expired, header explicitly forced) says the write
+ *  should be allowed — yet it isn't. This calls a SQL-editor-defined function
+ *  (see supabase/migrations/0004_debug_whoami.sql) that does nothing but ask
+ *  Postgres to evaluate auth.uid() for real, in the exact same request context
+ *  a table write would use, with no table or RLS policy involved at all. If
+ *  this comes back null, the problem is server-side auth propagation, not
+ *  anything in this app. If it comes back with a real id, the problem is
+ *  specific to the productions table/policy itself. */
+export async function debugWhoAmI(
+  url: string,
+  anonKey: string
+): Promise<{ uid: string | null; roleName: string | null; error?: string }> {
+  try {
+    await ensureAnonymousSession(url, anonKey);
+    const client = await getAuthedClient(url, anonKey);
+    const { data, error } = await client.rpc("debug_whoami");
+    if (error) return { uid: null, roleName: null, error: describeError(error) };
+    const row = Array.isArray(data) ? data[0] : data;
+    return { uid: row?.uid ?? null, roleName: row?.role_name ?? null };
+  } catch (err) {
+    return { uid: null, roleName: null, error: describeError(err) };
+  }
 }
 
 /** Fetches every row belonging to a production from every synced table, keyed

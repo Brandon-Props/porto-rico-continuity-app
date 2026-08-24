@@ -10,7 +10,7 @@ import { getActiveProductionId } from "@/db/repositories/productions";
 import { listCategories, addCustomCategory } from "@/db/repositories/categories";
 import { DEFAULT_PHOTO_CATEGORIES } from "@/types";
 import { getSupabaseOverride, setSupabaseOverride, clearSupabaseOverride, getActiveSyncProvider } from "@/lib/sync";
-import { fetchInviteCode } from "@/lib/sync/SupabaseSyncProvider";
+import { fetchInviteCode, debugWhoAmI } from "@/lib/sync/SupabaseSyncProvider";
 import { reconcileCloudIdentity } from "@/lib/sync/identity";
 
 export default function SettingsPage() {
@@ -26,6 +26,7 @@ export default function SettingsPage() {
   const provider = getActiveSyncProvider();
 
   const [inviteCode, setInviteCode] = useState<string | null | "loading">(null);
+  const [whoAmI, setWhoAmI] = useState<string | null>(null);
 
   useEffect(() => {
     if (!provider.isConfigured() || !productionId) return;
@@ -164,6 +165,41 @@ export default function SettingsPage() {
                 Crew members open the app, tap Login → Join with Invite Code, and enter this. They&apos;ll need
                 internet once to pull the schedule down; everything after that works offline like normal.
               </p>
+            </div>
+          )}
+
+          {provider.isConfigured() && (
+            <div className="mt-2 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                Debug: Check Auth
+              </div>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                Asks the database directly what it thinks your sign-in id is, with nothing else involved.
+              </p>
+              <Button
+                fullWidth
+                variant="secondary"
+                onClick={async () => {
+                  setWhoAmI("Checking…");
+                  const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? existingOverride?.url;
+                  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? existingOverride?.anonKey;
+                  if (!url || !anonKey) {
+                    setWhoAmI("Not configured");
+                    return;
+                  }
+                  const result = await debugWhoAmI(url, anonKey);
+                  if (result.error) {
+                    setWhoAmI(`Error: ${result.error}`);
+                  } else {
+                    setWhoAmI(`uid=${result.uid ?? "NULL"} role=${result.roleName ?? "NULL"}`);
+                  }
+                }}
+              >
+                Check Auth
+              </Button>
+              {whoAmI && (
+                <div className="mt-2 break-all rounded-lg bg-[var(--surface)] p-2 text-xs text-[var(--text)]">{whoAmI}</div>
+              )}
             </div>
           )}
         </div>
