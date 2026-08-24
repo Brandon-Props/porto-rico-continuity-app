@@ -152,10 +152,6 @@ const PRODUCTION_SCOPED_TABLES = [
  * Safe to use on a genuine mistake, unlike a real delete would be.
  */
 export async function removeProductionLocally(productionId: string): Promise<void> {
-  const photos = await db.photos.where({ productionId }).toArray();
-  const photoIds = photos.map((p) => p.id);
-  const blobKeys = photos.flatMap((p) => [p.originalBlobKey, p.displayBlobKey, p.thumbBlobKey].filter(Boolean));
-
   const allTables = [
     db.productions,
     db.productionMembers,
@@ -176,18 +172,36 @@ export async function removeProductionLocally(productionId: string): Promise<voi
   ];
 
   await db.transaction("rw", allTables, async () => {
+    // `.where({ productionId })` requires productionId to be part of that
+    // table's declared Dexie index (schema.ts) — true for scenes/shootDays/
+    // photos/etc., but NOT for sceneScheduleEntries, shots, or takes (they're
+    // only indexed by sceneId/shotId, even though every row still HAS a
+    // productionId field). Calling `.where()` on those three threw a schema
+    // error that aborted this whole transaction — silently rolling back the
+    // delete along with everything else, which is exactly why the button
+    // looked like it was doing nothing. `.toArray()` + a plain JS filter
+    // works on every table regardless of what's indexed, so use that
+    // uniformly here instead of assuming an index that isn't always there.
+    const photos = (await db.photos.toArray()).filter((p) => p.productionId === productionId);
+    const photoIds = photos.map((p) => p.id);
+    const blobKeys = photos.flatMap((p) => [p.originalBlobKey, p.displayBlobKey, p.thumbBlobKey].filter(Boolean));
+
     const removedIdsByEntity = new Map<string, Set<string>>();
     removedIdsByEntity.set("productions", new Set([productionId]));
 
     for (const { dexie, entity } of PRODUCTION_SCOPED_TABLES) {
-      const table = (db as unknown as Record<string, import("dexie").EntityTable<{ id: string }, "id">>)[dexie];
-      const rows = await table.where({ productionId }).toArray();
+      const table = (db as unknown as Record<string, import("dexie").EntityTable<{ id: string; productionId?: string }, "id">>)[dexie];
+      const rows = (await table.toArray()).filter((r) => r.productionId === productionId);
       const ids = rows.map((r) => r.id);
       removedIdsByEntity.set(entity, new Set(ids));
       if (ids.length > 0) await table.bulkDelete(ids);
     }
 
-    await db.activityLog.where({ productionId }).delete();
+    const activityLogIds = (await db.activityLog.toArray())
+      .filter((a) => a.productionId === productionId)
+      .map((a) => a.id);
+    if (activityLogIds.length > 0) await db.activityLog.bulkDelete(activityLogIds);
+
     await db.productions.delete(productionId);
     if (blobKeys.length > 0) await db.photoBlobs.bulkDelete(blobKeys);
     if (photoIds.length > 0) await db.blobUploads.bulkDelete(photoIds);

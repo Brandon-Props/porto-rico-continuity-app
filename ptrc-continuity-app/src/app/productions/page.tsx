@@ -26,6 +26,8 @@ export default function ProductionsPage() {
   // silently auto-dismiss as "cancelled" without ever showing), which looked
   // exactly like "I tap delete and the production just stays there."
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   const handleSelect = (id: string) => {
     setActiveProductionId(id);
@@ -40,8 +42,18 @@ export default function ProductionsPage() {
   };
 
   const handleRemove = async (id: string) => {
-    await removeProductionLocally(id);
-    setConfirmingId(null);
+    setRemoving(true);
+    setRemoveError(null);
+    try {
+      await removeProductionLocally(id);
+      setConfirmingId(null);
+    } catch (err) {
+      // A failure here used to be invisible — the confirm box would just sit
+      // there with nothing seeming to happen. Show whatever actually broke.
+      setRemoveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRemoving(false);
+    }
   };
 
   return (
@@ -66,9 +78,12 @@ export default function ProductionsPage() {
                 This only affects this device — if it&apos;s a real shared production, nothing is deleted from the
                 cloud, and you can get it back anytime with its invite code.
               </p>
+              {removeError && <p className="text-xs font-semibold text-[var(--danger)]">{removeError}</p>}
               <div className="flex gap-2">
-                <Button variant="ghost" onClick={() => setConfirmingId(null)}>Cancel</Button>
-                <Button fullWidth variant="secondary" onClick={() => handleRemove(p.id)}>Remove From This Device</Button>
+                <Button variant="ghost" onClick={() => { setConfirmingId(null); setRemoveError(null); }}>Cancel</Button>
+                <Button fullWidth variant="secondary" disabled={removing} onClick={() => handleRemove(p.id)}>
+                  {removing ? "Removing…" : "Remove From This Device"}
+                </Button>
               </div>
             </div>
           ) : (
