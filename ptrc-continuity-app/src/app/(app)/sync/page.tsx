@@ -7,6 +7,7 @@ import { db } from "@/db/schema";
 import { syncEngine } from "@/lib/sync/SyncEngine";
 import { useSyncStatus } from "@/hooks/useSyncStatus";
 import { getActiveSyncProvider } from "@/lib/sync";
+import { SYNC_PROVIDER_BUILD } from "@/lib/sync/SupabaseSyncProvider";
 
 const STATE_COPY: Record<string, { title: string; body: string }> = {
   offline: { title: "OFFLINE", body: "No connection right now. Everything you do is saved locally and will sync automatically once you're back online." },
@@ -32,6 +33,7 @@ export default function SyncQueuePage() {
           <div className="text-2xl font-black text-[var(--text)]">{copy.title}</div>
           <p className="mt-1 text-sm text-[var(--text-muted)]">{copy.body}</p>
           <p className="mt-2 text-xs text-[var(--text-muted)]">Backend: {provider.isConfigured() ? provider.name : "not connected"}</p>
+          <p className="mt-1 text-[10px] text-[var(--text-muted)]">Sync code build: {SYNC_PROVIDER_BUILD}</p>
         </div>
       </div>
 

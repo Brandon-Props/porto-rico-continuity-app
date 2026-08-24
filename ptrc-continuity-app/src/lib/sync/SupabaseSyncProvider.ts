@@ -3,6 +3,15 @@ import type { SyncOperation } from "@/types";
 import type { SyncProvider } from "./SyncProvider";
 import { toSnakeCase, toCamelCase } from "./caseTransform";
 
+// Bumped by hand on every change to this file's push() logic. The error text
+// this file produces looks identical across several recent fixes (same
+// describeError/uid/jwt suffix shape), which made it impossible to tell from
+// a screenshot alone whether a device was actually running new code or a
+// stale cached bundle. src/app/(app)/sync/page.tsx displays this — if it
+// doesn't match the value in this exact file, that device has not picked up
+// the latest deploy yet, full stop, no need to interpret error text at all.
+export const SYNC_PROVIDER_BUILD = "plain-insert-v2";
+
 // Table names line up 1:1 with supabase/migrations/0001_init.sql.
 const ENTITY_TO_TABLE: Record<string, string> = {
   productions: "productions",
