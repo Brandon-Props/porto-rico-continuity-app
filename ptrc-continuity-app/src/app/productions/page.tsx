@@ -21,6 +21,12 @@ export default function ProductionsPage() {
 
   const productions = useLiveQuery(() => db.productions.filter((p) => !p.deletedAt).toArray(), []);
 
+  // Tap-to-confirm inline instead of window.confirm() — a native confirm()
+  // dialog is unreliable inside an installed iOS home-screen web app (it can
+  // silently auto-dismiss as "cancelled" without ever showing), which looked
+  // exactly like "I tap delete and the production just stays there."
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+
   const handleSelect = (id: string) => {
     setActiveProductionId(id);
     router.replace("/today");
@@ -33,15 +39,9 @@ export default function ProductionsPage() {
     router.replace("/today");
   };
 
-  const handleRemove = async (id: string, productionName: string) => {
-    if (
-      !window.confirm(
-        `Remove "${productionName}" from this device's list?\n\nThis only affects this device — if it's a real shared production, nothing is deleted from the cloud, and you can get it back anytime with its invite code.`
-      )
-    ) {
-      return;
-    }
+  const handleRemove = async (id: string) => {
     await removeProductionLocally(id);
+    setConfirmingId(null);
   };
 
   return (
@@ -56,30 +56,46 @@ export default function ProductionsPage() {
         {productions?.length === 0 && !creating && (
           <p className="text-sm text-[var(--text-muted)]">No productions yet — create one below.</p>
         )}
-        {productions?.map((p) => (
-          <div
-            key={p.id}
-            className="flex items-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface)] pr-2"
-          >
-            <button
-              onClick={() => handleSelect(p.id)}
-              className="tap-target flex flex-1 items-center justify-between px-5 py-4 text-left"
-            >
-              <div>
-                <div className="text-lg font-bold text-[var(--text)]">{p.name}</div>
-                <div className="text-xs uppercase tracking-wide text-[var(--text-muted)]">{p.shortCode} · {p.status}</div>
+        {productions?.map((p) =>
+          confirmingId === p.id ? (
+            <div key={p.id} className="flex flex-col gap-2 rounded-2xl border border-[var(--danger)]/50 bg-[var(--surface)] p-4">
+              <p className="text-sm text-[var(--text)]">
+                Remove <span className="font-bold">{p.name}</span> ({p.shortCode}) from this device&apos;s list?
+              </p>
+              <p className="text-xs text-[var(--text-muted)]">
+                This only affects this device — if it&apos;s a real shared production, nothing is deleted from the
+                cloud, and you can get it back anytime with its invite code.
+              </p>
+              <div className="flex gap-2">
+                <Button variant="ghost" onClick={() => setConfirmingId(null)}>Cancel</Button>
+                <Button fullWidth variant="secondary" onClick={() => handleRemove(p.id)}>Remove From This Device</Button>
               </div>
-              <span className="text-[var(--text-muted)]">→</span>
-            </button>
-            <button
-              onClick={() => handleRemove(p.id, p.name)}
-              aria-label={`Remove ${p.name} from this device`}
-              className="tap-target rounded-xl px-3 py-2 text-lg text-[var(--text-muted)]"
+            </div>
+          ) : (
+            <div
+              key={p.id}
+              className="flex items-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface)] pr-2"
             >
-              🗑
-            </button>
-          </div>
-        ))}
+              <button
+                onClick={() => handleSelect(p.id)}
+                className="tap-target flex flex-1 items-center justify-between px-5 py-4 text-left"
+              >
+                <div>
+                  <div className="text-lg font-bold text-[var(--text)]">{p.name}</div>
+                  <div className="text-xs uppercase tracking-wide text-[var(--text-muted)]">{p.shortCode} · {p.status}</div>
+                </div>
+                <span className="text-[var(--text-muted)]">→</span>
+              </button>
+              <button
+                onClick={() => setConfirmingId(p.id)}
+                aria-label={`Remove ${p.name} from this device`}
+                className="tap-target rounded-xl px-3 py-2 text-lg text-[var(--text-muted)]"
+              >
+                🗑
+              </button>
+            </div>
+          )
+        )}
       </div>
 
       {!creating ? (

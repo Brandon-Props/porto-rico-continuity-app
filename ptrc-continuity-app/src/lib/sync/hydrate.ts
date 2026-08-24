@@ -56,9 +56,10 @@ interface HydrateResult {
 export async function hydrateProductionFromCloud(
   url: string,
   anonKey: string,
-  productionId: string
+  productionId: string,
+  sinceIso?: string
 ): Promise<HydrateResult> {
-  const remoteByEntity = await pullProductionData(url, anonKey, productionId);
+  const remoteByEntity = await pullProductionData(url, anonKey, productionId, sinceIso);
   let applied = 0;
   let skippedNewerLocal = 0;
   const tableCounts: Record<string, number> = {};

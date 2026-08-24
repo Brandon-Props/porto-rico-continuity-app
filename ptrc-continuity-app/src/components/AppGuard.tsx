@@ -12,21 +12,57 @@ import { queueMissingBlobUploads } from "@/lib/sync/blobSync";
 const ENV_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const ENV_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
+// Remembers, per production, the last moment this device successfully pulled
+// from the cloud — lets routine background checks ask Postgres for only what
+// changed since then instead of re-downloading the whole production (236
+// scenes, every photo row, ...) on every ~25-second tick. A full pull with no
+// "since" still happens on cold app-start (self-healing if this cursor is
+// ever wrong or missing) and from the Sync screen's manual button.
+const LAST_PULLED_KEY_PREFIX = "ptrc.lastPulledAt.";
+
+function getLastPulledAt(productionId: string): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  return window.localStorage.getItem(LAST_PULLED_KEY_PREFIX + productionId) ?? undefined;
+}
+
+function setLastPulledAt(productionId: string, iso: string) {
+  window.localStorage.setItem(LAST_PULLED_KEY_PREFIX + productionId, iso);
+}
+
+// Cold-open, the 25s poll, and a visibility-change can all land close
+// together — without this, two overlapping pulls could both be mid-flight
+// against the same Dexie tables at once for no benefit.
+let pullInFlight = false;
+
 /** Fire-and-forget: claim this device's own membership under its real cloud
  *  identity, then pull anything other devices have added since last time. Runs
  *  quietly in the background — offline or not-yet-configured are both fine,
  *  the UI never waits on this. */
-function backgroundCloudSync(productionId: string) {
-  if (!getActiveSyncProvider().isConfigured()) return;
+function backgroundCloudSync(productionId: string, options: { full?: boolean } = {}) {
+  if (!getActiveSyncProvider().isConfigured() || pullInFlight) return;
   const override = getSupabaseOverride();
   const url = ENV_URL ?? override?.url;
   const anonKey = ENV_KEY ?? override?.anonKey;
   if (!url || !anonKey) return;
+
+  // Stamped before the request goes out (not after it resolves), so anything
+  // created on another device while this pull is in flight isn't missed on
+  // the next round — it'll just get fetched again, which is harmless.
+  const requestStartedAt = new Date().toISOString();
+  const sinceIso = options.full ? undefined : getLastPulledAt(productionId);
+
+  pullInFlight = true;
   reconcileCloudIdentity(url, anonKey, productionId)
-    .then(() => hydrateProductionFromCloud(url, anonKey, productionId))
-    .then(() => queueMissingBlobUploads())
+    .then(() => hydrateProductionFromCloud(url, anonKey, productionId, sinceIso))
+    .then(() => {
+      setLastPulledAt(productionId, requestStartedAt);
+      return queueMissingBlobUploads();
+    })
     .catch(() => {
       /* offline or not-yet-reachable — the sync badge on /sync reflects real state */
+    })
+    .finally(() => {
+      pullInFlight = false;
     });
 }
 
@@ -56,7 +92,7 @@ export function AppGuard({ children }: { children: ReactNode }) {
     }
     setProductionId(pid);
     setReady(true);
-    backgroundCloudSync(pid);
+    backgroundCloudSync(pid, { full: true });
   }, [router]);
 
   useEffect(() => {

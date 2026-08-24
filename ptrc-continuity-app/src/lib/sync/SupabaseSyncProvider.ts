@@ -227,11 +227,19 @@ export async function debugWhoAmI(
  *  by the same entity names used elsewhere (enqueueSync, ENTITY_TO_TABLE) so the
  *  caller (see src/lib/sync/hydrate.ts) can merge each list into its Dexie
  *  table. This is the half of sync that never existed before — without it, a
- *  device joining an existing production only ever sees what IT creates. */
+ *  device joining an existing production only ever sees what IT creates.
+ *
+ *  `sinceIso`, when given, adds `updated_at > sinceIso` to every table's
+ *  query — used by AppGuard's background polling so a device that's been
+ *  sitting open doesn't re-download the entire production (236 scenes, every
+ *  photo, ...) every ~25 seconds just to check for one new photo. Omit it
+ *  for a full pull (cold app start, or the Sync screen's manual "Get Latest"
+ *  button, which deliberately always does a full pull for peace of mind). */
 export async function pullProductionData(
   url: string,
   anonKey: string,
-  productionId: string
+  productionId: string,
+  sinceIso?: string
 ): Promise<Record<string, Record<string, unknown>[]>> {
   await ensureAnonymousSession(url, anonKey);
   const client = await getAuthedClient(url, anonKey);
@@ -239,11 +247,9 @@ export async function pullProductionData(
 
   for (const [entity, table] of Object.entries(ENTITY_TO_TABLE)) {
     const filterColumn = table === "productions" ? "id" : "production_id";
-    const { data, error } = await client
-      .from(table)
-      .select("*")
-      .eq(filterColumn, productionId)
-      .is("deleted_at", null);
+    let query = client.from(table).select("*").eq(filterColumn, productionId).is("deleted_at", null);
+    if (sinceIso) query = query.gt("updated_at", sinceIso);
+    const { data, error } = await query;
     results[entity] = error ? [] : (data ?? []).map((row) => toCamelCase(row as Record<string, unknown>));
   }
   return results;
