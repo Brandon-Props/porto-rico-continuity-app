@@ -1,14 +1,34 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { setCurrentUser } from "@/lib/currentUser";
+import { getCurrentUser, setCurrentUser, tryRecoverCurrentUserFromDb } from "@/lib/currentUser";
 
 export default function LoginPage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  // A device can land here not because it's genuinely new, but because
+  // localStorage got cleared (an iOS storage-eviction quirk) while the
+  // IndexedDB data — productions, scenes, photos — is still intact. Check
+  // for that silently before showing "set up this device" to someone who
+  // already set it up once. See tryRecoverCurrentUserFromDb for the details.
+  const [checkingRecovery, setCheckingRecovery] = useState(true);
+
+  useEffect(() => {
+    if (getCurrentUser()) {
+      router.replace("/productions");
+      return;
+    }
+    tryRecoverCurrentUserFromDb().then((recovered) => {
+      if (recovered) {
+        router.replace("/productions");
+      } else {
+        setCheckingRecovery(false);
+      }
+    });
+  }, [router]);
 
   const canContinue = name.trim().length > 1;
 
@@ -17,6 +37,14 @@ export default function LoginPage() {
     setCurrentUser(name.trim(), email.trim() || undefined);
     router.replace("/productions");
   };
+
+  if (checkingRecovery) {
+    return (
+      <div className="flex h-dvh items-center justify-center text-[var(--text-muted)]">
+        Loading…
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-dvh flex-col justify-center gap-6 bg-[var(--bg)] px-6">

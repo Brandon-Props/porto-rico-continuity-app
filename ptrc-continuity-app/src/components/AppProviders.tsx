@@ -39,6 +39,17 @@ export function AppProviders({ children }: { children: ReactNode }) {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = () => applyTheme((localStorage.getItem("ptrc.theme") as ThemeMode | null) ?? "system");
     mq.addEventListener("change", handler);
+
+    // Ask the browser not to evict this site's storage (localStorage/IndexedDB
+    // — everything the app keeps: current user, productions, scenes, photos)
+    // under disk pressure. Chrome/Android honors this reliably; iOS Safari's
+    // support is much less consistent even for an installed home-screen app,
+    // so this reduces but doesn't eliminate the risk of a device clearing
+    // local data on its own — that's why sync exists as the real safety net.
+    if (typeof navigator !== "undefined" && navigator.storage?.persist) {
+      navigator.storage.persist().catch(() => {});
+    }
+
     return () => mq.removeEventListener("change", handler);
   }, []);
 
