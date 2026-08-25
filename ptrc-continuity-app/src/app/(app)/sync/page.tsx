@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
+import { clsx } from "clsx";
 import { TopBar } from "@/components/TopBar";
 import { Button } from "@/components/ui/Button";
 import { db } from "@/db/schema";
@@ -30,6 +31,27 @@ export default function SyncQueuePage() {
   const pending = useLiveQuery(() => db.syncOperations.where("status").anyOf("pending", "syncing").reverse().sortBy("createdAt"), []);
   const failed = useLiveQuery(() => db.syncOperations.where("status").equals("failed").reverse().sortBy("createdAt"), []);
   const copy = STATE_COPY[status.state];
+
+  // The two lists above are about METADATA (which scene, notes, etc.) —
+  // they say nothing about whether a photo's actual IMAGE has reached the
+  // cloud. That upload runs separately (see blobSync.ts) and, until now, had
+  // no visibility anywhere: a photo could sit forever failing to upload its
+  // picture with zero indication on this screen, while everything else
+  // correctly said "✓ SYNCED". This surfaces that missing half.
+  const photoUploads = useLiveQuery(async () => {
+    const items = await db.blobUploads.where("status").notEqual("done").toArray();
+    return Promise.all(
+      items.map(async (item) => {
+        const photo = await db.photos.get(item.photoId);
+        const scene = photo ? await db.scenes.get(photo.sceneId) : undefined;
+        return {
+          ...item,
+          sceneLabel: scene ? `Scene ${scene.sceneNumber}` : "Unknown scene",
+          category: photo?.category ?? null,
+        };
+      })
+    );
+  }, []);
 
   // Everything above is about PUSH — what this device still needs to send up.
   // There was no visible way to ask "has anyone ELSE added anything I don't
@@ -87,6 +109,40 @@ export default function SyncQueuePage() {
             </Button>
             {pullResult && <p className="mt-2 text-sm text-[var(--text-muted)]">{pullResult}</p>}
           </div>
+        </div>
+      )}
+
+      {photoUploads && photoUploads.length > 0 && (
+        <div className="flex flex-col gap-2 px-4 pt-4">
+          <h2 className="text-sm font-bold uppercase tracking-wide text-[var(--text-muted)]">
+            Photo Images Still Uploading ({photoUploads.length})
+          </h2>
+          <p className="text-xs text-[var(--text-muted)]">
+            These are the actual pictures from this device still trying to reach the cloud — until each one
+            finishes, other devices won&apos;t be able to see it, even though the scene/note info for it already
+            has.
+          </p>
+          {photoUploads.slice(0, 50).map((item) => (
+            <div
+              key={item.photoId}
+              className={clsx(
+                "rounded-xl border p-3 text-sm",
+                item.status === "failed" ? "border-[var(--danger)]/40 bg-[var(--danger)]/10" : "border-[var(--border)] bg-[var(--surface)]"
+              )}
+            >
+              <div className="font-semibold text-[var(--text)]">
+                {item.sceneLabel}
+                {item.category ? ` · ${item.category}` : ""}
+              </div>
+              <div className="text-xs text-[var(--text-muted)]">
+                {item.status === "failed"
+                  ? `Failed after ${item.attemptCount} attempt${item.attemptCount === 1 ? "" : "s"}: ${item.lastError ?? "Unknown error"}`
+                  : item.status === "syncing"
+                    ? "Uploading now…"
+                    : "Waiting to upload…"}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
