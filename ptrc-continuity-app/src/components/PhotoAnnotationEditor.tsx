@@ -38,6 +38,14 @@ export function PhotoAnnotationEditor({
   const [color] = useState("#f5a623");
   const shapesRef = useRef<{ tool: Tool; points: Point[]; text?: string }[]>([]);
   const drawingRef = useRef(false);
+  // window.prompt() used to be used here for the text tool — but native
+  // browser dialogs (prompt/confirm/alert) are unreliable inside an iOS
+  // "Add to Home Screen" standalone PWA, the same install mode this crew
+  // actually uses on set. They can fail to appear at all or return
+  // immediately with nothing typed, which is exactly why every tool except
+  // text worked: this was the only one relying on a native dialog. A plain
+  // in-app text field sidesteps the whole problem.
+  const [textPrompt, setTextPrompt] = useState<{ point: Point; value: string } | null>(null);
 
   useEffect(() => {
     const img = new Image();
@@ -131,11 +139,7 @@ export function PhotoAnnotationEditor({
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const pt = toCanvasPoint(e);
     if (tool === "text") {
-      const text = window.prompt("Label text:");
-      if (text?.trim()) {
-        shapesRef.current.push({ tool: "text", points: [pt], text: text.trim() });
-        redraw();
-      }
+      setTextPrompt({ point: pt, value: "" });
       return;
     }
     drawingRef.current = true;
@@ -158,6 +162,14 @@ export function PhotoAnnotationEditor({
   const handleUndo = () => {
     shapesRef.current.pop();
     redraw();
+  };
+
+  const confirmText = () => {
+    if (textPrompt && textPrompt.value.trim()) {
+      shapesRef.current.push({ tool: "text", points: [textPrompt.point], text: textPrompt.value.trim() });
+      redraw();
+    }
+    setTextPrompt(null);
   };
 
   const handleSave = () => {
@@ -195,6 +207,26 @@ export function PhotoAnnotationEditor({
           Undo
         </Button>
       </div>
+
+      {textPrompt && (
+        <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/60 p-4 sm:items-center">
+          <div className="w-full max-w-sm rounded-2xl bg-[var(--surface)] p-4">
+            <label className="mb-2 block text-sm font-bold text-[var(--text)]">Label text</label>
+            <input
+              autoFocus
+              value={textPrompt.value}
+              onChange={(e) => setTextPrompt({ ...textPrompt, value: e.target.value })}
+              onKeyDown={(e) => e.key === "Enter" && confirmText()}
+              placeholder="e.g. Watch strap"
+              className="tap-target mb-3 w-full rounded-xl border border-[var(--border)] bg-black/20 px-3 text-base text-[var(--text)] outline-none"
+            />
+            <div className="flex gap-2">
+              <Button variant="secondary" fullWidth onClick={() => setTextPrompt(null)}>Cancel</Button>
+              <Button fullWidth onClick={confirmText}>Add</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

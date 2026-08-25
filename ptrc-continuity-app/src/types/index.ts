@@ -301,6 +301,11 @@ export interface PhotoAnnotation extends SyncableFields {
   photoId: string;
   layerBlobKey: string;
   toolType: "arrow" | "circle" | "rectangle" | "freehand" | "text";
+  /** Supabase Storage path for this annotation's drawn layer image, once
+   *  uploaded (see src/lib/sync/annotationBlobSync.ts) — mirrors photos'
+   *  originalStoragePath/etc. Undefined until the upload finishes, which is
+   *  exactly how another device knows there's nothing to fetch yet. */
+  layerStoragePath?: string;
 }
 
 export interface ContinuityNote extends SyncableFields {
