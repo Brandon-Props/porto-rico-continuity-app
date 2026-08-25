@@ -1,6 +1,6 @@
 "use client";
 
-import { usePhotoBlobUrl } from "@/hooks/usePhotoBlobUrl";
+import { usePhotoBlobUrlWithState } from "@/hooks/usePhotoBlobUrl";
 import type { Photo } from "@/types";
 import { clsx } from "clsx";
 
@@ -13,7 +13,7 @@ export function PhotoThumb({
   onClick?: () => void;
   size?: "sm" | "md" | "lg";
 }) {
-  const url = usePhotoBlobUrl(photo.thumbBlobKey);
+  const { url, state } = usePhotoBlobUrlWithState(photo.thumbBlobKey);
   const dims = size === "sm" ? "h-20 w-20" : size === "lg" ? "h-40 w-40" : "h-28 w-28";
 
   return (
@@ -24,6 +24,11 @@ export function PhotoThumb({
       {url ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={url} alt="" className="h-full w-full object-cover" />
+      ) : state === "missing" ? (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-[var(--surface-raised)] text-[var(--text-muted)]">
+          <span className="text-lg leading-none">⚠</span>
+          <span className="text-[9px] leading-none">Not uploaded</span>
+        </div>
       ) : (
         <div className="h-full w-full animate-pulse bg-[var(--border)]" />
       )}
