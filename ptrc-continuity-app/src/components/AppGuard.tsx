@@ -7,8 +7,8 @@ import { getActiveProductionId } from "@/db/repositories/productions";
 import { getActiveSyncProvider, getSupabaseOverride } from "@/lib/sync";
 import { reconcileCloudIdentity } from "@/lib/sync/identity";
 import { hydrateProductionFromCloud } from "@/lib/sync/hydrate";
-import { queueMissingBlobUploads } from "@/lib/sync/blobSync";
-import { queueMissingAnnotationBlobUploads } from "@/lib/sync/annotationBlobSync";
+import { queueMissingBlobUploads, resetStuckBlobUploads } from "@/lib/sync/blobSync";
+import { queueMissingAnnotationBlobUploads, resetStuckAnnotationBlobUploads } from "@/lib/sync/annotationBlobSync";
 
 const ENV_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const ENV_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -81,7 +81,12 @@ export function AppGuard({ children }: { children: ReactNode }) {
     }
     setProductionId(pid);
     setReady(true);
-    backgroundCloudSync(pid);
+    // Purely local (no network needed) — do this before backgroundCloudSync
+    // so anything orphaned mid-upload by a previous close/reload gets
+    // requeued right away instead of sitting stuck indefinitely.
+    resetStuckBlobUploads()
+      .then(() => resetStuckAnnotationBlobUploads())
+      .finally(() => backgroundCloudSync(pid));
   }, [router]);
 
   useEffect(() => {

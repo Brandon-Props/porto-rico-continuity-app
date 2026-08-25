@@ -108,6 +108,20 @@ export async function queueBlobUpload(photoId: string, force = false): Promise<v
   await db.blobUploads.put({ photoId, status: "pending", attemptCount: existing?.attemptCount ?? 0, createdAt: existing?.createdAt ?? new Date().toISOString() });
 }
 
+/** Called once at app startup (see AppGuard.tsx) — an item can be left
+ *  marked "syncing" forever if the app closed or reloaded mid-upload (weak
+ *  signal on set, tab closed, phone locked): uploadPendingBlobs only ever
+ *  retries "pending" or "failed" items, so a "syncing" one that never got to
+ *  finish just sits there permanently with no error and no retry. A fresh
+ *  app load is unambiguous proof that whatever attempt set that status is
+ *  gone, so it's always safe to treat it as interrupted and requeue it. */
+export async function resetStuckBlobUploads(): Promise<void> {
+  const stuck = await db.blobUploads.where("status").equals("syncing").toArray();
+  for (const item of stuck) {
+    await db.blobUploads.update(item.photoId, { status: "pending" });
+  }
+}
+
 /** One-time backfill for photos captured before blob upload existed at all —
  *  their metadata already synced, but nothing ever queued the image itself. */
 export async function queueMissingBlobUploads(): Promise<void> {
