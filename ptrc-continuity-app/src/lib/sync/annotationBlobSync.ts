@@ -17,6 +17,24 @@ import { enqueueSync, touch } from "@/db/repositories/helpers";
 import { toStoredBlob, fromStoredRecord } from "@/lib/camera/blobStorage";
 import { BUCKET, extensionFor, getStorageClient, resolveCreds, verifiedBlob } from "./blobSync";
 
+/** `annotation.layerBlobKey` is a LOCAL-ONLY field (see LOCAL_ONLY_FIELDS in
+ *  caseTransform.ts) — it's deliberately never sent to Postgres, so it never
+ *  comes back on a pull either. Any device other than the one that drew the
+ *  annotation sees `layerBlobKey: undefined` on the row it pulled down, not
+ *  the value the originating device set. Trusting that field crashed
+ *  IndexedDB lookups with "Invalid argument to Table.get()" and, in the
+ *  photo page's annotation thumbnails, silently passed `undefined` as the
+ *  key to look up — which the loading hook treats as "nothing to fetch" and
+ *  just sits there forever. That combination is exactly why an annotation
+ *  saved on one phone never appeared on another: this file's own upload
+ *  path worked, but every READ was looking up the wrong (missing) key.
+ *  Since the key is always `${annotationId}_layer`, every lookup below
+ *  derives it fresh from the annotation's id instead of trusting the field
+ *  to have survived the round trip. */
+export function layerBlobKeyFor(annotationId: string): string {
+  return `${annotationId}_layer`;
+}
+
 /** Queues an annotation's drawn layer image for upload — called right after
  *  it's saved. Safe to call more than once for the same annotation. */
 export async function queueAnnotationBlobUpload(annotationId: string): Promise<void> {
@@ -35,7 +53,7 @@ export async function queueAnnotationBlobUpload(annotationId: string): Promise<v
 export async function queueMissingAnnotationBlobUploads(): Promise<void> {
   const annotations = await db.photoAnnotations.filter((a) => !a.deletedAt && !a.layerStoragePath).toArray();
   for (const annotation of annotations) {
-    const hasLocalBlob = await db.annotationBlobs.get(annotation.layerBlobKey);
+    const hasLocalBlob = await db.annotationBlobs.get(layerBlobKeyFor(annotation.id));
     if (hasLocalBlob) await queueAnnotationBlobUpload(annotation.id);
   }
 }
@@ -59,7 +77,7 @@ export async function uploadPendingAnnotationBlobs(url: string, anonKey: string)
         continue;
       }
 
-      const rec = await db.annotationBlobs.get(annotation.layerBlobKey);
+      const rec = await db.annotationBlobs.get(layerBlobKeyFor(annotation.id));
       const raw = fromStoredRecord(rec);
       if (!raw) {
         throw new Error("This device no longer has the local image data for this annotation — nothing to upload.");
@@ -112,7 +130,7 @@ export async function fetchAndCacheAnnotationBlob(annotation: PhotoAnnotation): 
     const { data, error } = await client.storage.from(BUCKET).download(path);
     if (error || !data) return undefined;
     const stored = await toStoredBlob(data);
-    await db.annotationBlobs.put({ key: annotation.layerBlobKey, annotationId: annotation.id, ...stored });
+    await db.annotationBlobs.put({ key: layerBlobKeyFor(annotation.id), annotationId: annotation.id, ...stored });
     return data;
   } catch {
     return undefined;

@@ -21,6 +21,7 @@ import {
   updatePhotoMetadata,
 } from "@/db/repositories/photos";
 import { saveAnnotation, listAnnotations } from "@/db/repositories/annotations";
+import { layerBlobKeyFor } from "@/lib/sync/annotationBlobSync";
 import { getScene } from "@/db/repositories/scenes";
 import { getShot } from "@/db/repositories/shots";
 import { getTake } from "@/db/repositories/takes";
@@ -191,7 +192,7 @@ export default function PhotoViewerPage() {
             {annotations.map((a) => (
               <AnnotationThumb
                 key={a.id}
-                blobKey={a.layerBlobKey}
+                blobKey={layerBlobKeyFor(a.id)}
                 onEdit={(url) => { setAnnotateSourceUrl(url); setAnnotating(true); }}
               />
             ))}
