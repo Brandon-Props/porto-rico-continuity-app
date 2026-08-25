@@ -60,6 +60,15 @@ function extensionFor(blob: Blob): string {
   return "jpg";
 }
 
+/** Reads a Blob's actual bytes and hands back a fresh Blob built from them,
+ *  or null if it reads back empty. See the big comment at its call site for
+ *  why this can't just check `.size`. */
+async function verifiedBlob(blob: Blob): Promise<Blob | null> {
+  const buffer = await blob.arrayBuffer();
+  if (buffer.byteLength === 0) return null;
+  return new Blob([buffer], { type: blob.type || "image/jpeg" });
+}
+
 type Variant = "original" | "display" | "thumb";
 
 function blobKeyFor(photo: Photo, variant: Variant): string {
@@ -129,18 +138,27 @@ export async function uploadPendingBlobs(url: string, anonKey: string): Promise<
         db.photoBlobs.get(photo.displayBlobKey),
         db.photoBlobs.get(photo.thumbBlobKey),
       ]);
-      const originalBlob = fromStoredRecord(originalRec);
-      const displayBlob = fromStoredRecord(displayRec);
-      const thumbBlob = fromStoredRecord(thumbRec);
-      if (!originalBlob || !displayBlob || !thumbBlob) {
+      const rawOriginal = fromStoredRecord(originalRec);
+      const rawDisplay = fromStoredRecord(displayRec);
+      const rawThumb = fromStoredRecord(thumbRec);
+      if (!rawOriginal || !rawDisplay || !rawThumb) {
         throw new Error("This device no longer has the local image data for this photo — nothing to upload.");
       }
-      // A record can exist but be an empty (0-byte) Blob if it was corrupted
-      // by the iOS Safari IndexedDB Blob bug before the ArrayBuffer fix (see
-      // blobStorage.ts) — that's indistinguishable from "gone" for upload
-      // purposes, and worth saying plainly rather than retrying forever
-      // against Supabase with a vague "No content provided" error.
-      if (originalBlob.size === 0 || displayBlob.size === 0 || thumbBlob.size === 0) {
+      // Actually READ each blob's bytes here rather than trusting its
+      // reported `.size` — the iOS Safari IndexedDB Blob bug this guards
+      // against can leave a Blob whose `.size` still reports the original
+      // byte count while its real content silently reads back empty. That's
+      // exactly the shape of bug that made "No content provided" from
+      // Supabase such a confusing dead end: the blob "looked" fine right up
+      // until the upload actually tried to send it. Rebuilding a fresh Blob
+      // from the verified bytes also means the same underlying object never
+      // gets handed to fetch/upload twice.
+      const [originalBlob, displayBlob, thumbBlob] = await Promise.all([
+        verifiedBlob(rawOriginal),
+        verifiedBlob(rawDisplay),
+        verifiedBlob(rawThumb),
+      ]);
+      if (!originalBlob || !displayBlob || !thumbBlob) {
         throw new Error(
           "This photo's saved image is empty on this device (a known iOS storage glitch) and can't be uploaded — the picture will need to be retaken."
         );
