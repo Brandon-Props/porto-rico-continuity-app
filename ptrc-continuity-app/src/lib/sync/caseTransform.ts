@@ -26,6 +26,14 @@ export function snakeToCamelKey(key: string): string {
  *  silently failing sync with PGRST204 "Could not find the 'blob_pending'
  *  column of 'photo_annotations'" until it was added below.
  *
+ *  `layerBlobKey` is annotations.ts's equivalent of photos' own
+ *  originalBlobKey/displayBlobKey/thumbBlobKey below — a local IndexedDB
+ *  lookup key with no matching Postgres column. PostgREST only reports ONE
+ *  missing column per rejected request, so fixing `blobPending` above just
+ *  revealed this as the NEXT thing making every annotation create fail — a
+ *  good reminder that a PGRST204 error only proves that one field is bad, not
+ *  that it's the only one.
+ *
  *  `originalBlobKey`/`displayBlobKey`/`thumbBlobKey` are references into this
  *  device's own local blob storage (IndexedDB) — not the same thing as the
  *  `*_storage_path` columns on the `photos` table, which are meant to hold a
@@ -42,6 +50,7 @@ export const LOCAL_ONLY_FIELDS: ReadonlySet<string> = new Set([
   "originalBlobKey",
   "displayBlobKey",
   "thumbBlobKey",
+  "layerBlobKey",
 ]);
 
 export function toSnakeCase(
