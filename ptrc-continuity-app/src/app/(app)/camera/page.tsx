@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 import { TopBar } from "@/components/TopBar";
 import { Button } from "@/components/ui/Button";
 import { PickerSheet } from "@/components/ui/PickerSheet";
 import { PhotoThumb } from "@/components/PhotoThumb";
-import { useCameraStream } from "@/hooks/useCameraStream";
+import { useCameraStream, MIN_ZOOM } from "@/hooks/useCameraStream";
 import { useCurrentContext } from "@/hooks/useCurrentContext";
 import { getActiveProductionId } from "@/db/repositories/productions";
 import { listScenes, createScene } from "@/db/repositories/scenes";
@@ -21,7 +21,7 @@ export default function CameraPage() {
   const router = useRouter();
   const productionId = getActiveProductionId() ?? "";
   const { context, updateContext } = useCurrentContext();
-  const { videoRef, supported, capture, flip } = useCameraStream();
+  const { videoRef, supported, capture, flip, zoom, setZoom } = useCameraStream();
 
   const [scenePicker, setScenePicker] = useState(false);
   const [shotPicker, setShotPicker] = useState(false);
@@ -29,6 +29,37 @@ export default function CameraPage() {
   const [categoryPicker, setCategoryPicker] = useState(false);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [importProgress, setImportProgress] = useState<string | null>(null);
+
+  // Two-finger pinch to zoom the live preview. There's no built-in browser
+  // gesture for this on a <video> element, so it's tracked by hand: remember
+  // the finger spread and the zoom level at the moment a second finger
+  // touches down, then scale from there as the fingers move.
+  const pinchRef = useRef<{ startDistance: number; startZoom: number } | null>(null);
+
+  const touchDistance = (touches: React.TouchList): number => {
+    const [a, b] = [touches[0], touches[1]];
+    return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      pinchRef.current = { startDistance: touchDistance(e.touches), startZoom: zoom };
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2 && pinchRef.current) {
+      e.preventDefault();
+      const distance = touchDistance(e.touches);
+      const ratio = distance / pinchRef.current.startDistance;
+      setZoom(pinchRef.current.startZoom * ratio);
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (e.touches.length < 2) pinchRef.current = null;
+  };
 
   const scenes = useLiveQuery(() => listScenes(productionId), [productionId]);
   const scene = scenes?.find((s) => s.id === context.sceneId) ?? scenes?.[0];
@@ -93,6 +124,28 @@ export default function CameraPage() {
     }
   };
 
+  // Existing photos from the phone's camera roll — a reference photo texted
+  // over, something shot on a "real" camera and airdropped in, etc. Goes
+  // through the exact same capturePhoto() pipeline as a fresh shot (same
+  // scene/shot/take tagging, same local-first save, same upload queue), the
+  // only difference is where the bytes came from.
+  const handleGalleryFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0 || !scene) return;
+    setBusy(true);
+    try {
+      const list = Array.from(files);
+      for (let i = 0; i < list.length; i++) {
+        setImportProgress(list.length > 1 ? `Importing ${i + 1} of ${list.length}…` : "Importing…");
+        await capturePhoto(list[i], { sceneId: scene.id, shotId: shot?.id, takeId: take?.id, category });
+      }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1200);
+    } finally {
+      setImportProgress(null);
+      setBusy(false);
+    }
+  };
+
   const handleNextTake = async () => {
     if (!shot) return;
     const newTake = await createTake(shot.id);
@@ -152,9 +205,21 @@ export default function CameraPage() {
         <QuickChip label="CATEGORY" value={category} onClick={() => setCategoryPicker(true)} />
       </div>
 
-      <div className="relative mx-3 mt-2 aspect-square overflow-hidden rounded-2xl bg-black">
+      <div
+        className="relative mx-3 mt-2 aspect-square touch-none overflow-hidden rounded-2xl bg-black"
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+      >
         {supported ? (
-          <video ref={videoRef} className="h-full w-full object-cover" playsInline muted autoPlay />
+          <video
+            ref={videoRef}
+            className="h-full w-full object-cover"
+            style={{ transform: `scale(${zoom})`, transformOrigin: "center" }}
+            playsInline
+            muted
+            autoPlay
+          />
         ) : (
           <label className="flex h-full w-full cursor-pointer flex-col items-center justify-center gap-3 text-white">
             <span className="text-5xl">📷</span>
@@ -175,6 +240,18 @@ export default function CameraPage() {
           </div>
         )}
 
+        {importProgress && (
+          <div className="absolute inset-x-0 bottom-3 mx-auto w-fit rounded-full bg-black/70 px-4 py-1.5 text-sm font-bold text-white">
+            {importProgress}
+          </div>
+        )}
+
+        {supported && zoom > MIN_ZOOM + 0.01 && (
+          <div className="absolute bottom-3 left-3 rounded-full bg-black/50 px-2.5 py-1 text-xs font-bold text-white">
+            {zoom.toFixed(1)}×
+          </div>
+        )}
+
         {supported && (
           <button
             onClick={flip}
@@ -187,7 +264,23 @@ export default function CameraPage() {
       </div>
 
       {supported && (
-        <div className="flex justify-center py-4">
+        <div className="relative flex items-center justify-center py-4">
+          <label
+            className="tap-target absolute left-6 flex h-12 w-12 cursor-pointer items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-xl text-[var(--text)]"
+            aria-label="Add photo from gallery"
+          >
+            🖼
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                handleGalleryFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </label>
           <button
             onClick={handleCapture}
             disabled={busy}
