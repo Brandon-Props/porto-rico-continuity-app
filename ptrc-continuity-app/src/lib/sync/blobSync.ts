@@ -79,13 +79,18 @@ async function uploadOne(client: SupabaseClient, productionId: string, photoId: 
   return path;
 }
 
-/** Queues a photo's image for upload — called both right after capture, and
- *  as a one-time backfill (see queueMissingBlobUploads) for photos that
- *  existed before this feature did. Safe to call more than once for the same
- *  photo (the underlying table's primary key is photoId). */
-export async function queueBlobUpload(photoId: string): Promise<void> {
+/** Queues a photo's image for upload — called right after capture, as a
+ *  one-time backfill (see queueMissingBlobUploads) for photos that existed
+ *  before this feature did, and after a crop replaces a photo's local bytes
+ *  (see cropPhoto in db/repositories/photos.ts). Safe to call more than once
+ *  for the same photo (the underlying table's primary key is photoId).
+ *
+ *  Normally a no-op if this photo already finished uploading — but a crop
+ *  needs the NEW bytes to go up even though the old ones already made it to
+ *  "done", so it passes `force: true` to re-queue regardless of status. */
+export async function queueBlobUpload(photoId: string, force = false): Promise<void> {
   const existing = await db.blobUploads.get(photoId);
-  if (existing && existing.status !== "failed") return;
+  if (existing && existing.status !== "failed" && !force) return;
   await db.blobUploads.put({ photoId, status: "pending", attemptCount: existing?.attemptCount ?? 0, createdAt: existing?.createdAt ?? new Date().toISOString() });
 }
 

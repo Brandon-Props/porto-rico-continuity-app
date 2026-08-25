@@ -7,6 +7,13 @@ import { buildPhotoVariants } from "@/lib/camera/imageProcessing";
 import { getCurrentUser } from "@/lib/currentUser";
 import { queueBlobUpload, fetchAndCachePhotoBlob } from "@/lib/sync/blobSync";
 
+export interface CropFraction {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface CapturePhotoInput {
   sceneId: string;
   shotId?: string | null;
@@ -150,6 +157,59 @@ export async function updatePhotoMetadata(photoId: string, patch: Partial<Photo>
 
 export async function linkPhotoReference(photoId: string, referencesPhotoId: string) {
   await updatePhotoMetadata(photoId, { referencesPhotoId });
+}
+
+/**
+ * Crops a photo permanently — replaces its original/display/thumb images
+ * with the cropped versions, at the SAME blob keys and Storage path as
+ * before (see blobSync.ts's uploadOne, which uploads with `upsert: true`).
+ * `rect` is in fractions (0..1) of the image, from PhotoCropEditor.
+ *
+ * Known limitation: this re-uses the existing Storage path rather than a
+ * versioned one, so a device that already downloaded and cached this exact
+ * photo BEFORE the crop won't automatically notice the change and keeps
+ * showing its old cached copy — only a device that hasn't viewed this photo
+ * yet (the common case) will get the cropped version on first view. Good
+ * enough for now; a real cache-busting scheme (e.g. a version number baked
+ * into the Storage path) would be the next step if this turns out to matter
+ * in practice.
+ */
+export async function cropPhoto(photoId: string, rect: CropFraction): Promise<void> {
+  const photo = await db.photos.get(photoId);
+  if (!photo) throw new Error("Photo not found");
+
+  const originalBlob = await getPhotoBlob(photo.originalBlobKey);
+  if (!originalBlob) throw new Error("Couldn't load the full-resolution image to crop — try again once it's finished downloading.");
+
+  const bitmap = await createImageBitmap(originalBlob);
+  const sourceX = Math.round(rect.x * bitmap.width);
+  const sourceY = Math.round(rect.y * bitmap.height);
+  const sourceWidth = Math.max(1, Math.round(rect.w * bitmap.width));
+  const sourceHeight = Math.max(1, Math.round(rect.h * bitmap.height));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = sourceWidth;
+  canvas.height = sourceHeight;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas unavailable");
+  ctx.drawImage(bitmap, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
+  bitmap.close?.();
+
+  const croppedOriginal = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Crop failed"))), "image/jpeg", 0.92);
+  });
+  const variants = await buildPhotoVariants(croppedOriginal);
+
+  await db.photoBlobs.put({ key: photo.originalBlobKey, photoId: photo.id, variant: "original", blob: variants.original });
+  await db.photoBlobs.put({ key: photo.displayBlobKey, photoId: photo.id, variant: "display", blob: variants.display });
+  await db.photoBlobs.put({ key: photo.thumbBlobKey, photoId: photo.id, variant: "thumb", blob: variants.thumb });
+
+  touch(photo);
+  await db.photos.put(photo);
+  await enqueueSync("photos", photo.id, "update", photo);
+  // Re-upload the new bytes even though this photo already finished
+  // uploading once before (see queueBlobUpload's `force` param).
+  await queueBlobUpload(photo.id, true);
 }
 
 export async function softDeletePhoto(photoId: string) {

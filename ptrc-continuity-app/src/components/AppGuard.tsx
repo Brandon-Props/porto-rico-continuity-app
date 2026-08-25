@@ -12,24 +12,7 @@ import { queueMissingBlobUploads } from "@/lib/sync/blobSync";
 const ENV_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const ENV_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-// Remembers, per production, the last moment this device successfully pulled
-// from the cloud — lets routine background checks ask Postgres for only what
-// changed since then instead of re-downloading the whole production (236
-// scenes, every photo row, ...) on every ~25-second tick. A full pull with no
-// "since" still happens on cold app-start (self-healing if this cursor is
-// ever wrong or missing) and from the Sync screen's manual button.
-const LAST_PULLED_KEY_PREFIX = "ptrc.lastPulledAt.";
-
-function getLastPulledAt(productionId: string): string | undefined {
-  if (typeof window === "undefined") return undefined;
-  return window.localStorage.getItem(LAST_PULLED_KEY_PREFIX + productionId) ?? undefined;
-}
-
-function setLastPulledAt(productionId: string, iso: string) {
-  window.localStorage.setItem(LAST_PULLED_KEY_PREFIX + productionId, iso);
-}
-
-// Cold-open, the 25s poll, and a visibility-change can all land close
+// Cold-open, the poll interval, and a visibility-change can all land close
 // together — without this, two overlapping pulls could both be mid-flight
 // against the same Dexie tables at once for no benefit.
 let pullInFlight = false;
@@ -37,27 +20,30 @@ let pullInFlight = false;
 /** Fire-and-forget: claim this device's own membership under its real cloud
  *  identity, then pull anything other devices have added since last time. Runs
  *  quietly in the background — offline or not-yet-configured are both fine,
- *  the UI never waits on this. */
-function backgroundCloudSync(productionId: string, options: { full?: boolean } = {}) {
+ *  the UI never waits on this.
+ *
+ *  Deliberately always a FULL pull, not an incremental "only what changed
+ *  since last time" one — an earlier version of this function tried that,
+ *  filtering by each row's `updated_at`. That broke silently for exactly the
+ *  case that matters most here: a photo captured with a weak signal on set
+ *  sits queued for a while with an `updated_at` stamped at CAPTURE time, not
+ *  at the moment it actually reaches Supabase. By the time it finally pushes,
+ *  another device's incremental cursor may have already moved past that
+ *  timestamp — so that photo would never satisfy "newer than my cursor" and
+ *  would stay invisible on that device until a full reload. Full pulls avoid
+ *  that trap entirely at the cost of a slightly heavier request; correctness
+ *  matters a lot more here than shaving payload size. */
+function backgroundCloudSync(productionId: string) {
   if (!getActiveSyncProvider().isConfigured() || pullInFlight) return;
   const override = getSupabaseOverride();
   const url = ENV_URL ?? override?.url;
   const anonKey = ENV_KEY ?? override?.anonKey;
   if (!url || !anonKey) return;
 
-  // Stamped before the request goes out (not after it resolves), so anything
-  // created on another device while this pull is in flight isn't missed on
-  // the next round — it'll just get fetched again, which is harmless.
-  const requestStartedAt = new Date().toISOString();
-  const sinceIso = options.full ? undefined : getLastPulledAt(productionId);
-
   pullInFlight = true;
   reconcileCloudIdentity(url, anonKey, productionId)
-    .then(() => hydrateProductionFromCloud(url, anonKey, productionId, sinceIso))
-    .then(() => {
-      setLastPulledAt(productionId, requestStartedAt);
-      return queueMissingBlobUploads();
-    })
+    .then(() => hydrateProductionFromCloud(url, anonKey, productionId))
+    .then(() => queueMissingBlobUploads())
     .catch(() => {
       /* offline or not-yet-reachable — the sync badge on /sync reflects real state */
     })
@@ -69,10 +55,11 @@ function backgroundCloudSync(productionId: string, options: { full?: boolean } =
 // How often to check for other crew members' new photos/scenes while the app
 // is sitting open. Cold-open alone (the original behavior) meant a photo
 // someone else took could be fully synced and sitting in the cloud for hours
-// before this device happened to notice — confirmed 2026-08-24 when a crew
-// member's photos showed up fine on one device but not another that had just
-// been left open in the background the whole time.
-const BACKGROUND_PULL_INTERVAL_MS = 25_000;
+// before this device happened to notice. A full pull every 45s is still a
+// small, infrequent request — nowhere near heavy enough to explain the earlier
+// sluggishness on its own; that was the 25s cadence plus overlapping pulls,
+// both addressed above.
+const BACKGROUND_PULL_INTERVAL_MS = 45_000;
 
 export function AppGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -92,7 +79,7 @@ export function AppGuard({ children }: { children: ReactNode }) {
     }
     setProductionId(pid);
     setReady(true);
-    backgroundCloudSync(pid, { full: true });
+    backgroundCloudSync(pid);
   }, [router]);
 
   useEffect(() => {

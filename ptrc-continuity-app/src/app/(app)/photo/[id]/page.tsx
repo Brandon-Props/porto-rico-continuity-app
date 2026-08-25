@@ -7,9 +7,11 @@ import { TopBar } from "@/components/TopBar";
 import { Button } from "@/components/ui/Button";
 import { PickerSheet } from "@/components/ui/PickerSheet";
 import { PhotoAnnotationEditor } from "@/components/PhotoAnnotationEditor";
+import { PhotoCropEditor, type CropRect } from "@/components/PhotoCropEditor";
 import { usePhotoBlobUrl } from "@/hooks/usePhotoBlobUrl";
 import { useAnnotationBlobUrl } from "@/hooks/useAnnotationBlobUrl";
 import {
+  cropPhoto,
   getPhoto,
   getPhotoBlob,
   listPhotosForScene,
@@ -38,6 +40,9 @@ export default function PhotoViewerPage() {
   const photoId = params.id;
 
   const [annotating, setAnnotating] = useState(false);
+  const [cropping, setCropping] = useState(false);
+  const [cropError, setCropError] = useState<string | null>(null);
+  const [cropBusy, setCropBusy] = useState(false);
   const [comparePicker, setComparePicker] = useState(false);
   const [compareId, setCompareId] = useState<string | null>(null);
   const [compareMode, setCompareMode] = useState<"side" | "overlay">("side");
@@ -76,6 +81,19 @@ export default function PhotoViewerPage() {
   const handleSaveAnnotation = async (blob: Blob) => {
     await saveAnnotation(photo.id, photo.productionId, blob);
     setAnnotating(false);
+  };
+
+  const handleSaveCrop = async (rect: CropRect) => {
+    setCropBusy(true);
+    setCropError(null);
+    try {
+      await cropPhoto(photo.id, rect);
+      setCropping(false);
+    } catch (err) {
+      setCropError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCropBusy(false);
+    }
   };
 
   const handleShare = async () => {
@@ -151,10 +169,12 @@ export default function PhotoViewerPage() {
 
       <div className="grid grid-cols-2 gap-2 px-3 pt-4">
         <Button variant="secondary" onClick={() => setAnnotating(true)}>✎ Annotate</Button>
+        <Button variant="secondary" onClick={() => { setCropError(null); setCropping(true); }}>⛶ Crop</Button>
         <Button variant="secondary" onClick={() => setComparePicker(true)}>⇄ Compare</Button>
         <Button variant="secondary" onClick={handleShare}>⤴ Share</Button>
-        <Button variant="secondary" onClick={handleDownload}>⬇ Download</Button>
+        <Button variant="secondary" className="col-span-2" onClick={handleDownload}>⬇ Download</Button>
       </div>
+      {cropError && <p className="px-3 pt-2 text-sm font-semibold text-[var(--danger)]">{cropError}</p>}
 
       {annotations && annotations.length > 0 && (
         <div className="flex flex-col gap-1 px-3 pt-4">
@@ -216,6 +236,15 @@ export default function PhotoViewerPage() {
 
       {annotating && displayUrl && (
         <PhotoAnnotationEditor imageUrl={displayUrl} onSave={handleSaveAnnotation} onClose={() => setAnnotating(false)} />
+      )}
+
+      {cropping && displayUrl && (
+        <PhotoCropEditor imageUrl={displayUrl} onSave={handleSaveCrop} onClose={() => setCropping(false)} />
+      )}
+      {cropBusy && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 text-sm font-bold text-white">
+          Cropping…
+        </div>
       )}
 
       <PickerSheet
