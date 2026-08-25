@@ -48,6 +48,15 @@ export async function queueAnnotationBlobUpload(annotationId: string): Promise<v
   });
 }
 
+/** Same "syncing" orphan as blobSync.ts's resetStuckBlobUploads, for
+ *  annotation layer images — called once at app startup. */
+export async function resetStuckAnnotationBlobUploads(): Promise<void> {
+  const stuck = await db.annotationBlobUploads.where("status").equals("syncing").toArray();
+  for (const item of stuck) {
+    await db.annotationBlobUploads.update(item.annotationId, { status: "pending" });
+  }
+}
+
 /** One-time backfill for annotations saved before this feature existed —
  *  their row already synced, but nothing ever queued the image itself. */
 export async function queueMissingAnnotationBlobUploads(): Promise<void> {
