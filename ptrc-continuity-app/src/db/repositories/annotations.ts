@@ -4,7 +4,7 @@ import { db } from "@/db/schema";
 import type { PhotoAnnotation } from "@/types";
 import { baseFields, enqueueSync, logActivity, newId } from "./helpers";
 import { toStoredBlob, fromStoredRecord } from "@/lib/camera/blobStorage";
-import { queueAnnotationBlobUpload, fetchAndCacheAnnotationBlob } from "@/lib/sync/annotationBlobSync";
+import { queueAnnotationBlobUpload, fetchAndCacheAnnotationBlob, layerBlobKeyFor } from "@/lib/sync/annotationBlobSync";
 
 export async function saveAnnotation(photoId: string, productionId: string, blob: Blob): Promise<PhotoAnnotation> {
   const base = baseFields();
@@ -12,7 +12,7 @@ export async function saveAnnotation(photoId: string, productionId: string, blob
     ...base,
     productionId,
     photoId,
-    layerBlobKey: `${base.id}_layer`,
+    layerBlobKey: layerBlobKeyFor(base.id),
     toolType: "freehand",
   };
   const stored = await toStoredBlob(blob);
