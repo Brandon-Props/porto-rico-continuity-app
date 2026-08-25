@@ -13,6 +13,7 @@ import { SYNC_PROVIDER_BUILD } from "@/lib/sync/SupabaseSyncProvider";
 import { getActiveProductionId } from "@/db/repositories/productions";
 import { hydrateProductionFromCloud } from "@/lib/sync/hydrate";
 import { queueMissingBlobUploads } from "@/lib/sync/blobSync";
+import { queueMissingAnnotationBlobUploads } from "@/lib/sync/annotationBlobSync";
 
 const ENV_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const ENV_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -53,6 +54,25 @@ export default function SyncQueuePage() {
     );
   }, []);
 
+  // Same idea as photoUploads above, for an annotation's drawn layer image
+  // (see annotationBlobSync.ts) — an annotation's row could say "synced"
+  // while its actual markup image sat stuck on this device forever, with
+  // nothing anywhere saying so.
+  const annotationUploads = useLiveQuery(async () => {
+    const items = await db.annotationBlobUploads.where("status").notEqual("done").toArray();
+    return Promise.all(
+      items.map(async (item) => {
+        const annotation = await db.photoAnnotations.get(item.annotationId);
+        const photo = annotation ? await db.photos.get(annotation.photoId) : undefined;
+        const scene = photo ? await db.scenes.get(photo.sceneId) : undefined;
+        return {
+          ...item,
+          sceneLabel: scene ? `Scene ${scene.sceneNumber}` : "Unknown scene",
+        };
+      })
+    );
+  }, []);
+
   // Everything above is about PUSH — what this device still needs to send up.
   // There was no visible way to ask "has anyone ELSE added anything I don't
   // have yet" — the app only checked that automatically on a cold start, so a
@@ -75,6 +95,7 @@ export default function SyncQueuePage() {
     try {
       const result = await hydrateProductionFromCloud(url, anonKey, productionId);
       await queueMissingBlobUploads();
+      await queueMissingAnnotationBlobUploads();
       setPullResult(result.applied > 0 ? `Got ${result.applied} new or updated item${result.applied === 1 ? "" : "s"}.` : "Already up to date — nothing new.");
     } catch (err) {
       setPullResult(err instanceof Error ? err.message : String(err));
@@ -134,6 +155,36 @@ export default function SyncQueuePage() {
                 {item.sceneLabel}
                 {item.category ? ` · ${item.category}` : ""}
               </div>
+              <div className="text-xs text-[var(--text-muted)]">
+                {item.status === "failed"
+                  ? `Failed after ${item.attemptCount} attempt${item.attemptCount === 1 ? "" : "s"}: ${item.lastError ?? "Unknown error"}`
+                  : item.status === "syncing"
+                    ? "Uploading now…"
+                    : "Waiting to upload…"}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {annotationUploads && annotationUploads.length > 0 && (
+        <div className="flex flex-col gap-2 px-4 pt-4">
+          <h2 className="text-sm font-bold uppercase tracking-wide text-[var(--text-muted)]">
+            Annotation Drawings Still Uploading ({annotationUploads.length})
+          </h2>
+          <p className="text-xs text-[var(--text-muted)]">
+            These are the drawn markup images from this device still trying to reach the cloud — until each one
+            finishes, other devices will see the note that an annotation exists but not the actual drawing.
+          </p>
+          {annotationUploads.slice(0, 50).map((item) => (
+            <div
+              key={item.annotationId}
+              className={clsx(
+                "rounded-xl border p-3 text-sm",
+                item.status === "failed" ? "border-[var(--danger)]/40 bg-[var(--danger)]/10" : "border-[var(--border)] bg-[var(--surface)]"
+              )}
+            >
+              <div className="font-semibold text-[var(--text)]">{item.sceneLabel}</div>
               <div className="text-xs text-[var(--text-muted)]">
                 {item.status === "failed"
                   ? `Failed after ${item.attemptCount} attempt${item.attemptCount === 1 ? "" : "s"}: ${item.lastError ?? "Unknown error"}`

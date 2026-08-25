@@ -3,6 +3,7 @@ import type { SyncOperation } from "@/types";
 import type { SyncProvider } from "./SyncProvider";
 import { toSnakeCase, toCamelCase } from "./caseTransform";
 import { uploadPendingBlobs as uploadPendingBlobsImpl } from "./blobSync";
+import { uploadPendingAnnotationBlobs as uploadPendingAnnotationBlobsImpl } from "./annotationBlobSync";
 
 // Bumped by hand on every change to this file's push() logic. The error text
 // this file produces looks identical across several recent fixes (same
@@ -11,7 +12,7 @@ import { uploadPendingBlobs as uploadPendingBlobsImpl } from "./blobSync";
 // stale cached bundle. src/app/(app)/sync/page.tsx displays this — if it
 // doesn't match the value in this exact file, that device has not picked up
 // the latest deploy yet, full stop, no need to interpret error text at all.
-export const SYNC_PROVIDER_BUILD = "sync-timeout-v4";
+export const SYNC_PROVIDER_BUILD = "annotation-sync-v5";
 
 /** A stuck network request previously had no way to give up, freezing that
  *  queue item on "syncing" forever and blocking everything behind it — no
@@ -396,6 +397,7 @@ export class SupabaseSyncProvider implements SyncProvider {
   async uploadPendingBlobs(): Promise<void> {
     if (!this.url || !this.anonKey) return;
     await uploadPendingBlobsImpl(this.url, this.anonKey);
+    await uploadPendingAnnotationBlobsImpl(this.url, this.anonKey);
   }
 }
 

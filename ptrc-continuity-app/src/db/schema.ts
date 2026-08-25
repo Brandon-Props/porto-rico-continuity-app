@@ -36,7 +36,17 @@ export interface PhotoBlobRecord {
 export interface AnnotationBlobRecord {
   key: string;
   annotationId: string;
-  blob: Blob;
+  /** Raw bytes as an ArrayBuffer rather than a Blob — same reasoning as
+   *  PhotoBlobRecord above (src/lib/camera/blobStorage.ts): a Blob sitting in
+   *  IndexedDB can silently read back empty on iOS Safari while still
+   *  reporting its original `.size`. Annotation layer images are drawn
+   *  on-device the same way photos are captured, so they're just as exposed
+   *  to that bug — apply the same fix here rather than wait for it to show up
+   *  as a second, harder-to-connect mystery later. */
+  buffer?: ArrayBuffer;
+  mimeType?: string;
+  /** @deprecated legacy shape from before the ArrayBuffer fix. */
+  blob?: Blob;
 }
 
 /** One row per photo whose image still needs uploading to Supabase Storage
@@ -46,6 +56,18 @@ export interface AnnotationBlobRecord {
  *  a queue with small JSON row pushes. */
 export interface BlobUploadRecord {
   photoId: string;
+  status: "pending" | "syncing" | "done" | "failed";
+  attemptCount: number;
+  lastError?: string;
+  createdAt: string;
+}
+
+/** Same idea as BlobUploadRecord, but for an annotation's drawn layer image
+ *  (see src/lib/sync/annotationBlobSync.ts) — a photo annotation didn't have
+ *  ANY image-upload path at all until this was added, so an annotation saved
+ *  fine on the phone that drew it and simply never reached anyone else. */
+export interface AnnotationBlobUploadRecord {
+  annotationId: string;
   status: "pending" | "syncing" | "done" | "failed";
   attemptCount: number;
   lastError?: string;
@@ -72,6 +94,7 @@ export class ContinuityDB extends Dexie {
   photoBlobs!: EntityTable<PhotoBlobRecord, "key">;
   annotationBlobs!: EntityTable<AnnotationBlobRecord, "key">;
   blobUploads!: EntityTable<BlobUploadRecord, "photoId">;
+  annotationBlobUploads!: EntityTable<AnnotationBlobUploadRecord, "annotationId">;
 
   constructor() {
     super("ptrc-continuity");
@@ -103,6 +126,12 @@ export class ContinuityDB extends Dexie {
     // so existing installs upgrade in place without losing anything.
     this.version(2).stores({
       blobUploads: "photoId, status, createdAt",
+    });
+
+    // Same again for the annotation-image upload queue — no existing stores
+    // change shape, so this is purely additive too.
+    this.version(3).stores({
+      annotationBlobUploads: "annotationId, status, createdAt",
     });
   }
 }

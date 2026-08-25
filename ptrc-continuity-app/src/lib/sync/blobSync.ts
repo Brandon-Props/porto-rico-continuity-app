@@ -25,11 +25,15 @@ import { toStoredBlob, fromStoredRecord } from "@/lib/camera/blobStorage";
 import { getSupabaseOverride } from "./index";
 import { ensureAnonymousSession } from "./SupabaseSyncProvider";
 
-const BUCKET = "continuity-photos";
+// Exported so annotationBlobSync.ts (the same upload pipeline, applied to a
+// photo annotation's drawn layer image instead of the photo itself) can
+// reuse this module's Storage-client/credential/verification logic rather
+// than duplicating it.
+export const BUCKET = "continuity-photos";
 const ENV_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const ENV_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-function resolveCreds(): { url: string; anonKey: string } | null {
+export function resolveCreds(): { url: string; anonKey: string } | null {
   const override = getSupabaseOverride();
   const url = ENV_URL ?? override?.url;
   const anonKey = ENV_KEY ?? override?.anonKey;
@@ -42,7 +46,7 @@ function resolveCreds(): { url: string; anonKey: string } | null {
 // request actually carries this device's real session, not just the anon key.
 let cachedStorageClient: { token: string; client: SupabaseClient } | null = null;
 
-async function getStorageClient(url: string, anonKey: string): Promise<SupabaseClient> {
+export async function getStorageClient(url: string, anonKey: string): Promise<SupabaseClient> {
   await ensureAnonymousSession(url, anonKey);
   const base = createClient(url, anonKey);
   const { data } = await base.auth.getSession();
@@ -54,7 +58,7 @@ async function getStorageClient(url: string, anonKey: string): Promise<SupabaseC
   return client;
 }
 
-function extensionFor(blob: Blob): string {
+export function extensionFor(blob: Blob): string {
   if (blob.type === "image/png") return "png";
   if (blob.type === "image/webp") return "webp";
   return "jpg";
@@ -63,7 +67,7 @@ function extensionFor(blob: Blob): string {
 /** Reads a Blob's actual bytes and hands back a fresh Blob built from them,
  *  or null if it reads back empty. See the big comment at its call site for
  *  why this can't just check `.size`. */
-async function verifiedBlob(blob: Blob): Promise<Blob | null> {
+export async function verifiedBlob(blob: Blob): Promise<Blob | null> {
   const buffer = await blob.arrayBuffer();
   if (buffer.byteLength === 0) return null;
   return new Blob([buffer], { type: blob.type || "image/jpeg" });

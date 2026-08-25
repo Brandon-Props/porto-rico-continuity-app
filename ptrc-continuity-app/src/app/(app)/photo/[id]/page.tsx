@@ -40,6 +40,13 @@ export default function PhotoViewerPage() {
   const photoId = params.id;
 
   const [annotating, setAnnotating] = useState(false);
+  // Which image the annotation editor opens on top of: the photo's own
+  // display image for a brand-new markup, or an existing "Annotated
+  // Versions" thumbnail's image when the user taps it to keep drawing on top
+  // of what's already there. There was previously no way to reopen a saved
+  // annotation at all — tapping it did nothing, so any further markup had to
+  // start over from the clean photo.
+  const [annotateSourceUrl, setAnnotateSourceUrl] = useState<string | null>(null);
   const [cropping, setCropping] = useState(false);
   const [cropError, setCropError] = useState<string | null>(null);
   const [cropBusy, setCropBusy] = useState(false);
@@ -168,7 +175,7 @@ export default function PhotoViewerPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-2 px-3 pt-4">
-        <Button variant="secondary" onClick={() => setAnnotating(true)}>✎ Annotate</Button>
+        <Button variant="secondary" onClick={() => { setAnnotateSourceUrl(displayUrl ?? null); setAnnotating(true); }}>✎ Annotate</Button>
         <Button variant="secondary" onClick={() => { setCropError(null); setCropping(true); }}>⛶ Crop</Button>
         <Button variant="secondary" onClick={() => setComparePicker(true)}>⇄ Compare</Button>
         <Button variant="secondary" onClick={handleShare}>⤴ Share</Button>
@@ -179,9 +186,14 @@ export default function PhotoViewerPage() {
       {annotations && annotations.length > 0 && (
         <div className="flex flex-col gap-1 px-3 pt-4">
           <h3 className="text-xs font-bold uppercase tracking-wide text-[var(--text-muted)]">Annotated Versions</h3>
+          <p className="text-[11px] text-[var(--text-muted)]">Tap one to keep drawing on top of it as a new version.</p>
           <div className="flex gap-2 overflow-x-auto">
             {annotations.map((a) => (
-              <AnnotationThumb key={a.id} blobKey={a.layerBlobKey} />
+              <AnnotationThumb
+                key={a.id}
+                blobKey={a.layerBlobKey}
+                onEdit={(url) => { setAnnotateSourceUrl(url); setAnnotating(true); }}
+              />
             ))}
           </div>
         </div>
@@ -234,8 +246,8 @@ export default function PhotoViewerPage() {
         <Button variant="danger" fullWidth onClick={handleDelete}>🗑 Move to Trash</Button>
       </div>
 
-      {annotating && displayUrl && (
-        <PhotoAnnotationEditor imageUrl={displayUrl} onSave={handleSaveAnnotation} onClose={() => setAnnotating(false)} />
+      {annotating && annotateSourceUrl && (
+        <PhotoAnnotationEditor imageUrl={annotateSourceUrl} onSave={handleSaveAnnotation} onClose={() => setAnnotating(false)} />
       )}
 
       {cropping && displayUrl && (
@@ -355,9 +367,13 @@ function Tag({ label, onRemove }: { label: string; onRemove: () => void }) {
   );
 }
 
-function AnnotationThumb({ blobKey }: { blobKey: string }) {
+function AnnotationThumb({ blobKey, onEdit }: { blobKey: string; onEdit: (url: string) => void }) {
   const url = useAnnotationBlobUrl(blobKey);
   if (!url) return <div className="h-20 w-20 shrink-0 animate-pulse rounded-lg bg-[var(--border)]" />;
-  // eslint-disable-next-line @next/next/no-img-element
-  return <img src={url} alt="Annotation" className="h-20 w-20 shrink-0 rounded-lg border border-[var(--border)] object-cover" />;
+  return (
+    <button onClick={() => onEdit(url)} className="tap-target shrink-0">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={url} alt="Annotation" className="h-20 w-20 rounded-lg border border-[var(--border)] object-cover" />
+    </button>
+  );
 }
