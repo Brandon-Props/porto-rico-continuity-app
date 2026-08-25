@@ -4,6 +4,7 @@ import { db } from "@/db/schema";
 import type { Photo, PhotoFlag } from "@/types";
 import { baseFields, enqueueSync, logActivity, newId, nowIso, touch } from "./helpers";
 import { buildPhotoVariants } from "@/lib/camera/imageProcessing";
+import { toStoredBlob, fromStoredRecord } from "@/lib/camera/blobStorage";
 import { getCurrentUser } from "@/lib/currentUser";
 import { queueBlobUpload, fetchAndCachePhotoBlob } from "@/lib/sync/blobSync";
 
@@ -52,11 +53,17 @@ export async function capturePhoto(originalBlob: Blob, input: CapturePhotoInput)
     characterIds: input.characterIds ?? [],
   };
 
+  const [storedOriginal, storedDisplay, storedThumb] = await Promise.all([
+    toStoredBlob(variants.original),
+    toStoredBlob(variants.display),
+    toStoredBlob(variants.thumb),
+  ]);
+
   await db.transaction("rw", db.photos, db.photoBlobs, async () => {
     await db.photoBlobs.bulkAdd([
-      { key: photo.originalBlobKey, photoId: photo.id, variant: "original", blob: variants.original },
-      { key: photo.displayBlobKey, photoId: photo.id, variant: "display", blob: variants.display },
-      { key: photo.thumbBlobKey, photoId: photo.id, variant: "thumb", blob: variants.thumb },
+      { key: photo.originalBlobKey, photoId: photo.id, variant: "original", ...storedOriginal },
+      { key: photo.displayBlobKey, photoId: photo.id, variant: "display", ...storedDisplay },
+      { key: photo.thumbBlobKey, photoId: photo.id, variant: "thumb", ...storedThumb },
     ]);
     await db.photos.add(photo);
   });
@@ -78,7 +85,15 @@ export async function getPhoto(id: string): Promise<Photo | undefined> {
 
 export async function getPhotoBlob(key: string): Promise<Blob | undefined> {
   const rec = await db.photoBlobs.get(key);
-  if (rec) return rec.blob;
+  if (rec) {
+    const blob = fromStoredRecord(rec);
+    // A record can exist but hold 0 real bytes if it was written before the
+    // ArrayBuffer fix and got corrupted by the iOS Safari IndexedDB Blob bug
+    // (see blobStorage.ts). Treat that the same as "not cached" so the normal
+    // fallback below tries fetching a good copy from the cloud instead of
+    // permanently showing a broken image.
+    if (blob && blob.size > 0) return blob;
+  }
 
   // Not cached on this device — most likely a photo pulled down from another
   // device (see hydrate.ts) whose row arrived but whose actual image never
@@ -199,10 +214,15 @@ export async function cropPhoto(photoId: string, rect: CropFraction): Promise<vo
     canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Crop failed"))), "image/jpeg", 0.92);
   });
   const variants = await buildPhotoVariants(croppedOriginal);
+  const [storedOriginal, storedDisplay, storedThumb] = await Promise.all([
+    toStoredBlob(variants.original),
+    toStoredBlob(variants.display),
+    toStoredBlob(variants.thumb),
+  ]);
 
-  await db.photoBlobs.put({ key: photo.originalBlobKey, photoId: photo.id, variant: "original", blob: variants.original });
-  await db.photoBlobs.put({ key: photo.displayBlobKey, photoId: photo.id, variant: "display", blob: variants.display });
-  await db.photoBlobs.put({ key: photo.thumbBlobKey, photoId: photo.id, variant: "thumb", blob: variants.thumb });
+  await db.photoBlobs.put({ key: photo.originalBlobKey, photoId: photo.id, variant: "original", ...storedOriginal });
+  await db.photoBlobs.put({ key: photo.displayBlobKey, photoId: photo.id, variant: "display", ...storedDisplay });
+  await db.photoBlobs.put({ key: photo.thumbBlobKey, photoId: photo.id, variant: "thumb", ...storedThumb });
 
   touch(photo);
   await db.photos.put(photo);

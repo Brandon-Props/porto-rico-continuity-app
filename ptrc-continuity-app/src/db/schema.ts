@@ -22,7 +22,15 @@ export interface PhotoBlobRecord {
   key: string; // `${photoId}_original` | `_display` | `_thumb`
   photoId: string;
   variant: "original" | "display" | "thumb";
-  blob: Blob;
+  /** Raw bytes, stored as an ArrayBuffer rather than a Blob — see
+   *  src/lib/camera/blobStorage.ts for why. `mimeType` travels alongside it
+   *  since an ArrayBuffer has no type of its own. */
+  buffer?: ArrayBuffer;
+  mimeType?: string;
+  /** @deprecated legacy shape from before the ArrayBuffer fix — some records
+   *  written before this update may still have this instead of `buffer`.
+   *  Only ever read (via fromStoredRecord), never written, from here on. */
+  blob?: Blob;
 }
 
 export interface AnnotationBlobRecord {

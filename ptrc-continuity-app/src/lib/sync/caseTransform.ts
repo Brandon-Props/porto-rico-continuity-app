@@ -20,7 +20,11 @@ export function snakeToCamelKey(key: string): string {
  *
  *  `blobsPending` is stamped onto a photo's create payload
  *  (src/db/repositories/photos.ts) as a local marker that its blob still
- *  needs uploading to Storage.
+ *  needs uploading to Storage. `blobPending` (singular) is the same idea for
+ *  an annotation's create payload (src/db/repositories/annotations.ts) — a
+ *  separate field, easy to miss adding here, and every annotation create was
+ *  silently failing sync with PGRST204 "Could not find the 'blob_pending'
+ *  column of 'photo_annotations'" until it was added below.
  *
  *  `originalBlobKey`/`displayBlobKey`/`thumbBlobKey` are references into this
  *  device's own local blob storage (IndexedDB) — not the same thing as the
@@ -34,6 +38,7 @@ export const LOCAL_ONLY_FIELDS: ReadonlySet<string> = new Set([
   "dirty",
   "syncedAt",
   "blobsPending",
+  "blobPending",
   "originalBlobKey",
   "displayBlobKey",
   "thumbBlobKey",

@@ -21,6 +21,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { db } from "@/db/schema";
 import type { Photo } from "@/types";
 import { enqueueSync, touch } from "@/db/repositories/helpers";
+import { toStoredBlob, fromStoredRecord } from "@/lib/camera/blobStorage";
 import { getSupabaseOverride } from "./index";
 import { ensureAnonymousSession } from "./SupabaseSyncProvider";
 
@@ -128,14 +129,27 @@ export async function uploadPendingBlobs(url: string, anonKey: string): Promise<
         db.photoBlobs.get(photo.displayBlobKey),
         db.photoBlobs.get(photo.thumbBlobKey),
       ]);
-      if (!originalRec || !displayRec || !thumbRec) {
+      const originalBlob = fromStoredRecord(originalRec);
+      const displayBlob = fromStoredRecord(displayRec);
+      const thumbBlob = fromStoredRecord(thumbRec);
+      if (!originalBlob || !displayBlob || !thumbBlob) {
         throw new Error("This device no longer has the local image data for this photo — nothing to upload.");
+      }
+      // A record can exist but be an empty (0-byte) Blob if it was corrupted
+      // by the iOS Safari IndexedDB Blob bug before the ArrayBuffer fix (see
+      // blobStorage.ts) — that's indistinguishable from "gone" for upload
+      // purposes, and worth saying plainly rather than retrying forever
+      // against Supabase with a vague "No content provided" error.
+      if (originalBlob.size === 0 || displayBlob.size === 0 || thumbBlob.size === 0) {
+        throw new Error(
+          "This photo's saved image is empty on this device (a known iOS storage glitch) and can't be uploaded — the picture will need to be retaken."
+        );
       }
 
       const [originalPath, displayPath, thumbPath] = await Promise.all([
-        uploadOne(client, photo.productionId, photo.id, "original", originalRec.blob),
-        uploadOne(client, photo.productionId, photo.id, "display", displayRec.blob),
-        uploadOne(client, photo.productionId, photo.id, "thumb", thumbRec.blob),
+        uploadOne(client, photo.productionId, photo.id, "original", originalBlob),
+        uploadOne(client, photo.productionId, photo.id, "display", displayBlob),
+        uploadOne(client, photo.productionId, photo.id, "thumb", thumbBlob),
       ]);
 
       const fresh = await db.photos.get(photo.id);
@@ -173,7 +187,8 @@ export async function fetchAndCachePhotoBlob(photo: Photo, variant: Variant): Pr
     const client = await getStorageClient(creds.url, creds.anonKey);
     const { data, error } = await client.storage.from(BUCKET).download(path);
     if (error || !data) return undefined;
-    await db.photoBlobs.put({ key: blobKeyFor(photo, variant), photoId: photo.id, variant, blob: data });
+    const stored = await toStoredBlob(data);
+    await db.photoBlobs.put({ key: blobKeyFor(photo, variant), photoId: photo.id, variant, ...stored });
     return data;
   } catch {
     return undefined;
